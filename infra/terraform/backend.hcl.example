@@ -1,0 +1,9 @@
+# Example remote-state backend config — copy to backend.hcl and use:
+#   terraform init -backend-config=backend.hcl
+# State is locked via a DynamoDB table (create it once, out of band).
+
+bucket         = "my-terraform-state-bucket"
+key            = "slack-devops-agent/unit-001/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "terraform-state-lock"
+encrypt        = true

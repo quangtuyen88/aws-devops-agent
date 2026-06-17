@@ -1,0 +1,498 @@
+# Component Catalogue (copied forward into units-generation)
+# Intent: Slack DevOps Agent Bot (intent-001-slack-devops-agent)
+# Source of truth: domain-design/components.yaml. Copied here UNCHANGED except for an
+# added `Unit:` ownership reference on each component (units-generation). All IDs,
+# names, behaviours, dependencies, and entity names are preserved verbatim — no
+# domain drift.
+#
+# units-generation decision (human answers 2026-06-17T11:39:24+08:00):
+#   Q1=a — ALL 8 components ship as ONE deployable unit, UNIT-001 (modular monolith);
+#          the C-1 intake→worker async boundary is an INTERNAL seam. contract-design
+#          stays skipped (no cross-unit contracts).
+#   Q3=b — the worker path (CMP-002 + CMP-003/004/005) is designed to scale
+#          horizontally INDEPENDENTLY of intake (CMP-001) WITHIN the single unit
+#          (multiple worker instances drain the internal queue); C-1 is preserved as a
+#          clean future extraction seam. Runtime mechanism is infrastructure-design.
+#   Q4=a — CMP-003 (Inference Provider, the A-1 seam) is packaged as a distinct
+#          buildable library/MODULE with a stable interface (swap Kiro↔Bedrock, test in
+#          isolation) — a MODULE boundary inside UNIT-001, NOT a separate deployable unit.
+# See units.md for the per-unit detail and internal module structure.
+#
+# Stage: domain-design (inception) · Owner: aidlc-app-architect-agent
+# Decomposition: balanced 8-component catalogue, CMP-001..CMP-008
+# (human answer 2026-06-17T10:25:36+08:00 — "agree to all" on questions.md Q1..Q6).
+# Refined 2026-06-17 against aidlc-systems-architect-agent-contribution.md:
+# DA-1 applied in place — correlation-id added to ENT-001 (InboundMention) and
+# ENT-004 (Answer) as the canonical end-to-end request id (== ProcessingJob.job-id).
+# DA-2..DA-7 are downstream design concerns (functional/nfr/infrastructure-design),
+# not component changes — recorded in components.md "Refinement" + "Notes" sections.
+# Logical building blocks only. Deployment grouping (single unit per A-4/C-4)
+# is decided at units-generation. Infrastructure (Slack API, Kiro/Bedrock
+# endpoint, aws-knowledge-mcp-server, the message queue, the durable datastore)
+# is a DEPENDENCY of these components, not a component.
+
+Component:
+  Id: CMP-001
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Intake/Adapter
+  Name: "Slack Interaction Adapter"
+  Behaviour-summary: "Owns the Slack boundary in both directions. Inbound: validates Slack events, parses @mentions, filters non-allowlisted channels and bot/self messages, and fetches thread replies on demand. Outbound: posts the acknowledgement, the final answer, and failure messages back into the originating thread, and captures helpfulness reactions. It is transport and content-shaping only — it does not reason about answers or own durable state."
+  Responsibilities:
+    - "Validate inbound Slack events and parse the @mention into a captured question (FR-1)"
+    - "Filter intake against the channel allowlist; stay silent or reply with the not-designated message for non-allowlisted channels (FR-2, S-14)"
+    - "Ignore the bot's own and other bots' messages even when they mention the bot (FR-20, S-21)"
+    - "Post the in-thread acknowledgement within the Slack synchronous window (FR-3, NFR-1)"
+    - "Fetch thread replies on request so the orchestrator can reconstruct conversation context (FR-4, CS-6 fetch-not-store)"
+    - "Render and post the full answer and failure/retry messages into the originating thread, formatted for Slack (FR-14, FR-17, S-6)"
+    - "Capture 👍/👎 reactions on an answer and forward the helpfulness signal for recording (FR-16, S-25)"
+  Boundaries:
+    - "Does NOT decide whether a job is a duplicate — it asks the Job Coordinator (CMP-006)"
+    - "Does NOT own the channel allowlist values — it reads them from Configuration & Policy (CMP-008)"
+    - "Does NOT run the agent loop, call inference, or call MCP — that is the Agent Orchestrator (CMP-002)"
+    - "Does NOT own durable feedback/adoption state — it forwards the raw reaction to the Operational Data Service (CMP-007)"
+    - "Does NOT own the message queue — that is infrastructure the intake path enqueues onto"
+  Source:
+    Requirements:
+      - FR-1
+      - FR-2
+      - FR-3
+      - FR-4
+      - FR-14
+      - FR-16
+      - FR-17
+      - FR-20
+      - NFR-1
+    Stories:
+      - S-1
+      - S-2
+      - S-6
+      - S-14
+      - S-21
+      - S-25
+  Dependency:
+    - Component:
+        Id: CMP-008
+        Name: "Configuration & Policy"
+        Interaction: "Reads the channel allowlist to enforce FR-2/S-14 at intake (read-only)."
+    - Component:
+        Id: CMP-006
+        Name: "Job Coordinator"
+        Interaction: "On a valid mention, registers the originating event and asks whether it is a new job (at-most-once-completed de-dup, CS-3) before acking and enqueuing."
+    - Component:
+        Id: CMP-007
+        Name: "Operational Data Service"
+        Interaction: "Forwards a captured 👍/👎 reaction so the helpfulness signal is recorded against the answer (FR-16, S-26)."
+  Dependent-Component:
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Calls the adapter to fetch thread replies (context reconstruction) and to post the answer, acknowledgement-resolving failure messages, into the thread."
+  Entities:
+    ENT-001:
+      Name: "InboundMention"
+      Description: "A parsed, accepted mention of the bot — the captured question and the Slack coordinates needed to answer it. Transient (per-request); not durable."
+      Attributes:
+        - "correlation-id"   # canonical end-to-end request id; equals ProcessingJob.job-id (CMP-006), stamped at intake and propagated across the C-1 async boundary for tracing + NFR-6 log hygiene (DA-1)
+        - "channel-id"
+        - "thread-ts"
+        - "message-ts"
+        - "author-id"
+        - "is-bot-author"
+        - "raw-text"
+        - "slack-retry-num"
+    ENT-002:
+      Name: "ReactionEvent"
+      Description: "A captured 👍/👎 reaction on a posted answer at the Slack boundary, before it is recorded as a durable feedback signal. Transient."
+      Attributes:
+        - "answer-message-ts"
+        - "reactor-id"
+        - "reaction-kind"   # positive | negative
+
+---
+
+Component:
+  Id: CMP-002
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Agent Worker (independently scalable, Q3)
+  Name: "Agent Orchestrator"
+  Behaviour-summary: "The async worker and reasoning core. For each accepted job it reconstructs thread context, runs the safety gate before any external send, checks the cost budget, then iterates inference and MCP grounding under a tool-call/timeout cap to compose a detailed, cited answer, and drives the job to a resolved or failure-resolved state. It owns 'how the answer is reasoned about', not Slack transport, secret-detection rules, durable counters, or configuration values."
+  Responsibilities:
+    - "Reconstruct thread-scoped conversation context from fetched replies for the agent loop (FR-4, CS-6)"
+    - "Invoke the safety gate on assembled input BEFORE any inference or MCP call (CS-4 ordering)"
+    - "Ask the Operational Data Service whether the request is within the cost budget, and route a denial to the failure path (NFR-8, S-18, S-19)"
+    - "Iterate inference + MCP grounding under a hard tool-call/timeout cap to produce a grounded answer (FR-5, FR-6, FR-7, CS-5)"
+    - "Compose the detailed answer: recommendation, rationale, trade-offs, alternative, and citations (FR-8, S-7..S-12)"
+    - "Drive job state transitions and resolve inference/MCP failures and oversized input with a clear in-thread message (FR-17, FR-21, S-19, S-22)"
+    - "Record adoption metrics and inference/MCP usage after processing (FR-18, S-27)"
+  Boundaries:
+    - "Does NOT own the ProcessingJob state machine or de-dup identity — it asks the Job Coordinator (CMP-006) to transition state"
+    - "Does NOT talk to Slack directly — all Slack I/O goes through the Slack Interaction Adapter (CMP-001)"
+    - "Does NOT own the secret-detection rules — it delegates to the Input Safety Scanner (CMP-005)"
+    - "Does NOT own durable counters/metrics or decide the budget threshold — it asks the Operational Data Service (CMP-007)"
+    - "Does NOT pick the inference backend or call the MCP server directly — it uses the Inference Provider (CMP-003) and MCP Client (CMP-004) abstractions"
+  Source:
+    Requirements:
+      - FR-4
+      - FR-5
+      - FR-6
+      - FR-7
+      - FR-8
+      - FR-9
+      - FR-10
+      - FR-11
+      - FR-12
+      - FR-13
+      - FR-17
+      - FR-18
+      - FR-21
+    Stories:
+      - S-3
+      - S-4
+      - S-5
+      - S-7
+      - S-8
+      - S-9
+      - S-10
+      - S-11
+      - S-12
+      - S-13
+      - S-19
+      - S-22
+      - S-27
+  Dependency:
+    - Component:
+        Id: CMP-001
+        Name: "Slack Interaction Adapter"
+        Interaction: "Fetches thread replies to reconstruct context, and posts the answer / failure-resolution message into the originating thread."
+    - Component:
+        Id: CMP-005
+        Name: "Input Safety Scanner"
+        Interaction: "Submits assembled input for secret/credential scanning and honours warn/refuse BEFORE any inference or MCP send (CS-4)."
+    - Component:
+        Id: CMP-007
+        Name: "Operational Data Service"
+        Interaction: "Asks 'may I proceed within budget?' before spending, and records adoption metrics + usage after processing (NFR-8, FR-18)."
+    - Component:
+        Id: CMP-003
+        Name: "Inference Provider"
+        Interaction: "Obtains model responses through the pluggable inference abstraction during the agent loop (FR-5)."
+    - Component:
+        Id: CMP-004
+        Name: "AWS Knowledge MCP Client"
+        Interaction: "Calls AWS Knowledge MCP tools to ground answers and obtain citable sources (FR-6, FR-7)."
+    - Component:
+        Id: CMP-006
+        Name: "Job Coordinator"
+        Interaction: "Transitions the job seen → in-progress → resolved and signals failure-resolution; relies on it for in-flight recovery (CS-2, CS-3)."
+    - Component:
+        Id: CMP-008
+        Name: "Configuration & Policy"
+        Interaction: "Reads usage-policy and agent-loop limit settings to shape processing (read-only)."
+  Dependent-Component: []
+  # Triggered asynchronously by the message queue (infrastructure) on the intake→worker
+  # handoff (C-1/C-4). The queue is not a component, so no component lists CMP-002 as a
+  # synchronous dependency — this is the deliberate async boundary, not a missing edge.
+  Entities:
+    ENT-003:
+      Name: "ConversationContext"
+      Description: "Thread-scoped working memory for the agent loop, reconstructed from fetched Slack replies at request time. Ephemeral — never persisted to a durable cross-session store (A-8, OOS-4, CS-6)."
+      Attributes:
+        - "thread-ts"
+        - "ordered-messages"
+        - "assembled-prompt-input"
+        - "within-size-budget"   # FR-21 / A-9
+    ENT-004:
+      Name: "Answer"
+      Description: "The composed response to a question: recommendation plus rationale, trade-offs, optional alternative, and the citations gathered from grounding. Transient (produced per request, posted via CMP-001)."
+      Attributes:
+        - "correlation-id"       # same canonical request id as the originating InboundMention / ProcessingJob.job-id; makes FeedbackSignal.answer-ref unambiguous and threads the answer back to its request (DA-1)
+        - "recommendation"
+        - "rationale"
+        - "trade-offs"
+        - "alternatives"
+        - "citations"
+        - "is-grounded"          # false ⇒ explicitly marked ungrounded (A-2)
+        - "code-snippets"        # IaC/code blocks where requested (FR-13)
+
+---
+
+Component:
+  Id: CMP-003
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Inference Provider LIBRARY (Q4 — distinct buildable module, stable interface, NOT a separate deployable unit)
+  Name: "Inference Provider"
+  Behaviour-summary: "A pluggable abstraction over LLM/SLM inference. It presents a stable, backend-agnostic interface to the orchestrator so the underlying engine (Kiro-backed, with an alternate such as Bedrock) can change without touching agent-core logic. This is the A-1 seam — the highest-risk assumption."
+  Responsibilities:
+    - "Expose a backend-agnostic 'run inference' operation to the orchestrator (FR-5, S-3)"
+    - "Translate orchestrator requests to the configured inference backend and normalise responses"
+    - "Surface inference unavailability/errors as a typed failure for the orchestrator's S-19 path"
+    - "Report token/usage information so the orchestrator can record it for the cost guardrail"
+  Boundaries:
+    - "Does NOT decide whether to call inference (the orchestrator does) or enforce the cost budget"
+    - "Does NOT run the agent loop or compose answers"
+    - "Does NOT own the choice of concrete backend at deploy time — that is resolved in infrastructure-design (A-1)"
+  Source:
+    Requirements:
+      - FR-5
+    Stories:
+      - S-3
+  Dependency: []
+  # Calls the external Kiro/Bedrock inference endpoint — that endpoint is infrastructure,
+  # not a component.
+  Dependent-Component:
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Calls the provider to obtain model responses during the agent loop."
+  Entities:
+    ENT-005:
+      Name: "InferenceExchange"
+      Description: "One request/response round-trip with the inference backend: the prompt sent and the model output plus usage metadata. Transient."
+      Attributes:
+        - "prompt-input"
+        - "model-output"
+        - "token-usage"
+        - "backend-id"
+
+---
+
+Component:
+  Id: CMP-004
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Agent Worker (grounding seam)
+  Name: "AWS Knowledge MCP Client"
+  Behaviour-summary: "Calls the aws-knowledge-mcp-server tools (documentation search, regional availability) and returns citable AWS documentation sources for grounding. It is the grounding seam — when it returns no source, the answer is marked ungrounded rather than fabricated (A-2)."
+  Responsibilities:
+    - "Call AWS Knowledge MCP tools to retrieve documentation relevant to the question (FR-6, S-4)"
+    - "Return citable sources (title + link + snippet) for incorporation into answers (FR-7, S-5)"
+    - "Signal 'no source available' so the orchestrator can mark an answer ungrounded (A-2)"
+  Boundaries:
+    - "Does NOT decide when grounding is needed or compose the answer (the orchestrator does)"
+    - "Does NOT own or operate the aws-knowledge-mcp-server — that is an external dependency"
+    - "Does NOT fabricate citations — absence of a source is reported, never invented"
+  Source:
+    Requirements:
+      - FR-6
+      - FR-7
+    Stories:
+      - S-4
+      - S-5
+  Dependency: []
+  # Calls the external aws-knowledge-mcp-server — infrastructure / external dependency,
+  # not a component.
+  Dependent-Component:
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Calls the MCP client to ground answers and obtain citable sources."
+  Entities:
+    ENT-006:
+      Name: "GroundingSource"
+      Description: "A citable AWS documentation source returned by an MCP tool call, used to ground and cite an answer. Transient (per request)."
+      Attributes:
+        - "title"
+        - "url"
+        - "snippet"
+        - "tool-name"
+
+---
+
+Component:
+  Id: CMP-005
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Agent Worker (pre-send safety gate, CS-4)
+  Name: "Input Safety Scanner"
+  Behaviour-summary: "The pre-send safety gate. It inspects assembled input for secrets, credentials, keys, and tokens and returns a verdict (allow / warn / refuse). Its detection rules evolve on their own cadence (A-6), independent of the agent loop. By contract it runs before any input reaches inference or MCP (CS-4)."
+  Responsibilities:
+    - "Detect likely secrets/credentials/keys/tokens in assembled input (FR-15, S-16)"
+    - "Return a verdict that lets the caller warn and/or refuse rather than process normally (FR-15)"
+    - "Guarantee flagged input can be blocked before forwarding to inference or MCP (NFR-4, CS-4)"
+  Boundaries:
+    - "Does NOT post messages to Slack or decide the user-facing wording (the orchestrator/adapter do)"
+    - "Does NOT call inference or MCP — it only judges input"
+    - "Does NOT own configuration; detection rules/patterns are its internal concern (A-6)"
+  Source:
+    Requirements:
+      - FR-15
+      - NFR-4
+    Stories:
+      - S-16
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Submits assembled input for scanning and acts on the verdict before any external send (CS-4)."
+  Entities:
+    ENT-007:
+      Name: "SafetyVerdict"
+      Description: "The outcome of scanning one input: whether secrets were detected, what was matched (redacted), and the recommended action. Transient."
+      Attributes:
+        - "flagged"
+        - "findings"          # redacted match descriptors — never raw secret values (NFR-6)
+        - "recommended-action"  # allow | warn | refuse
+
+---
+
+Component:
+  Id: CMP-006
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Job/State (shared-state boundary CS-1)
+  Name: "Job Coordinator"
+  Behaviour-summary: "Owns the lifecycle of an async processing job created by the intake→worker split (C-1/C-4). It models de-duplication as at-most-once *completed* processing (seen / in-progress / resolved, CS-3) and detects jobs acked but lost before completion so they are retried or failure-resolved (CS-2). It owns job-control state; it does not reason about the answer."
+  Responsibilities:
+    - "Register an incoming Slack event by identity and report whether processing should start (de-dup, FR-19, S-20)"
+    - "Model the job state machine: seen → in-progress → resolved (CS-3)"
+    - "Guarantee at-most-once *completed* processing so a crashed-before-answer job can be reprocessed (CS-2, CS-3)"
+    - "Detect acked-but-incomplete jobs (worker loss/restart) for retry-or-resolve (CS-2, S-19)"
+  Boundaries:
+    - "Does NOT own the message queue or its datastore — those are infrastructure dependencies"
+    - "Does NOT reason about answers, call inference/MCP, or talk to Slack"
+    - "Does NOT own adoption/feedback/cost state — that is the Operational Data Service (CMP-007)"
+  Source:
+    Requirements:
+      - FR-19
+    Stories:
+      - S-19
+      - S-20
+      - S-24
+  Dependency: []
+  # Persists ProcessingJob state in a durable datastore (e.g. DynamoDB) — infrastructure,
+  # not a component. Whether it shares a physical store with CMP-007 is an
+  # infrastructure-design decision, not a domain one.
+  Dependent-Component:
+    - Component:
+        Id: CMP-001
+        Name: "Slack Interaction Adapter"
+        Interaction: "On intake, registers the event and checks de-dup before acking/enqueuing."
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Transitions job state through processing and triggers in-flight recovery on failure/loss."
+  Entities:
+    ENT-008:
+      Name: "ProcessingJob"
+      Description: "A unit of async work for one originating Slack mention, with the de-dup identity and the state machine that guarantees at-most-once-completed processing and in-flight recovery. Durable (part of the CS-1 shared-state boundary)."
+      Attributes:
+        - "job-id"
+        - "slack-event-identity"   # de-dup key (CS-3)
+        - "originating-message-ref"
+        - "status"                 # seen | in-progress | resolved
+        - "attempt-count"
+        - "last-transition-at"
+
+---
+
+Component:
+  Id: CMP-007
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Operational Data (shared-state boundary CS-1)
+  Name: "Operational Data Service"
+  Behaviour-summary: "The single owner of the service's durable aggregate state: adoption metrics, helpfulness feedback signals, and the cost-usage counter (the A-8 aggregate-operational-data store, CS-1). Because it owns the cost counter, it also owns the 'is this request within budget?' decision, reading thresholds from Configuration & Policy. It is not conversation memory (OOS-4)."
+  Responsibilities:
+    - "Record adoption metrics: distinct developers served and questions handled per period (FR-18, S-27)"
+    - "Record per-answer 👍/👎 helpfulness signals (FR-16, S-26)"
+    - "Maintain the per-period inference/MCP usage counter (NFR-8, S-18)"
+    - "Expose a 'within budget?' decision using the counter and the guardrail threshold (NFR-8, S-18)"
+  Boundaries:
+    - "Does NOT own the guardrail threshold values — it reads them from Configuration & Policy (CMP-008)"
+    - "Does NOT own job-control / de-dup state — that is the Job Coordinator (CMP-006)"
+    - "Does NOT store conversation memory (OOS-4, A-8) — only aggregate operational data"
+    - "Does NOT capture reactions from Slack itself — it receives the signal from the adapter (CMP-001)"
+  Source:
+    Requirements:
+      - FR-16
+      - FR-18
+      - NFR-8
+    Stories:
+      - S-18
+      - S-26
+      - S-27
+  Dependency:
+    - Component:
+        Id: CMP-008
+        Name: "Configuration & Policy"
+        Interaction: "Reads the guardrail threshold to evaluate the within-budget decision (read-only)."
+  Dependent-Component:
+    - Component:
+        Id: CMP-001
+        Name: "Slack Interaction Adapter"
+        Interaction: "Forwards captured 👍/👎 reactions to be recorded as feedback signals."
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Asks the within-budget decision before spending and records adoption + usage after processing."
+  Entities:
+    ENT-009:
+      Name: "AdoptionMetric"
+      Description: "Aggregate adoption counters sufficient to report distinct developers served and questions handled per period. Durable; append/aggregate. Not conversation memory (A-8)."
+      Attributes:
+        - "period"
+        - "distinct-developers"
+        - "questions-handled"
+    ENT-010:
+      Name: "FeedbackSignal"
+      Description: "A helpfulness signal recorded against a specific answer for the success metric. Durable; append-mostly."
+      Attributes:
+        - "answer-ref"
+        - "signal"            # positive | negative
+        - "recorded-at"
+    ENT-011:
+      Name: "UsageCounter"
+      Description: "Per-period inference/MCP usage tally read on the hot path to enforce the cost guardrail (NFR-8). Durable; correctness-critical."
+      Attributes:
+        - "period"
+        - "usage-count"
+        - "last-updated-at"
+
+---
+
+Component:
+  Id: CMP-008
+  Unit: "UNIT-001"   # Slack DevOps Agent (single deployable unit) · internal module: Configuration & Policy (read-mostly)
+  Name: "Configuration & Policy"
+  Behaviour-summary: "The single owner of operator-set configuration: the channel allowlist, the published data-sensitivity usage policy, and the cost-guardrail thresholds. These are low-churn, read-mostly settings consumed by other components read-only, giving operators one place to manage all settings (S-15, S-17, S-18)."
+  Responsibilities:
+    - "Own the channel allowlist operators configure for where the bot answers (FR-2, S-15)"
+    - "Own the published data-sensitivity usage policy text (NFR-3, S-17)"
+    - "Own the cost-guardrail threshold configuration (NFR-8, S-18)"
+  Boundaries:
+    - "Does NOT enforce the allowlist (the adapter does), nor count usage or decide budget (the Operational Data Service does)"
+    - "Does NOT publish the policy to Slack itself — it holds the policy values consumers read"
+    - "Does NOT store runtime/aggregate data — only operator-set configuration"
+  Source:
+    Requirements:
+      - FR-2
+      - NFR-3
+      - NFR-8
+    Stories:
+      - S-15
+      - S-17
+      - S-18
+  Dependency: []
+  Dependent-Component:
+    - Component:
+        Id: CMP-001
+        Name: "Slack Interaction Adapter"
+        Interaction: "Reads the channel allowlist to filter intake."
+    - Component:
+        Id: CMP-002
+        Name: "Agent Orchestrator"
+        Interaction: "Reads usage-policy and agent-loop limit settings."
+    - Component:
+        Id: CMP-007
+        Name: "Operational Data Service"
+        Interaction: "Reads the guardrail threshold for the within-budget decision."
+  Entities:
+    ENT-012:
+      Name: "ChannelAllowlist"
+      Description: "The set of channels in which the bot is permitted to answer (FR-2). Operator-set configuration; read-mostly."
+      Attributes:
+        - "allowed-channel-ids"
+        - "non-allowlisted-behaviour"   # silent | reply-not-designated
+    ENT-013:
+      Name: "UsagePolicy"
+      Description: "The published data-sensitivity policy: only internal/non-production content, no secrets/PII/customer data (NFR-3). Operator-set."
+      Attributes:
+        - "policy-text"
+        - "published-location-ref"
+    ENT-014:
+      Name: "GuardrailConfig"
+      Description: "Operator-set cost-guardrail thresholds (per-request and/or per-period bound) consumed by the Operational Data Service (NFR-8). Concrete values set in nfr-design (A-7)."
+      Attributes:
+        - "per-request-limit"
+        - "per-period-limit"
+        - "period-definition"

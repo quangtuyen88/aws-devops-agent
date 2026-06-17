@@ -1,0 +1,398 @@
+# Business Rules — Functional Design (source of truth)
+# Intent: Slack DevOps Agent Bot (intent-001-slack-devops-agent)
+# Stage: functional-design (construction) · Unit: UNIT-001
+# Owner: aidlc-systems-architect-agent
+#
+# Numbered BR-001.. . Each rule: statement / category / applies-to (CMP + ENT + API) /
+# trigger / logic / violation / source (FR + S). Technology-agnostic. Concrete numeric
+# thresholds (timeouts, max attempts, CS-5 cap, size limit, budget limits) are named
+# parameters DEFERRED to nfr-design (A-7/A-9) — rules fix the SHAPE of enforcement.
+
+# --- Intake & filtering (CMP-001) ----------------------------------------------
+
+- id: BR-001
+  statement: "The bot answers only in operator-allowlisted channels; outside them it behaves per the configured non-allowlisted behaviour."
+  category: authorization
+  applies-to:
+    component-id: [CMP-001, CMP-008]
+    entity-id: [ENT-001, ENT-012]
+    api-id: [API-EXT-001]
+  trigger: "An InboundMention is received and has passed the bot/self filter (BR-002)."
+  logic: "IF InboundMention.channel-id NOT IN ChannelAllowlist.allowed-channel-ids THEN do not produce an answer; apply ChannelAllowlist.non-allowlisted-behaviour (silent ⇒ no reply; reply-not-designated ⇒ post the 'only operates in designated channels' message) ELSE proceed to intake."
+  violation: "Reject (no answer). Deterministic, configured behaviour — never a model-generated reply."
+  source:
+    requirements: [FR-2]
+    stories: [S-14, S-15]
+
+- id: BR-002
+  statement: "Messages authored by the bot itself or any other bot/app are never treated as questions, even if they @mention the bot."
+  category: validation
+  applies-to:
+    component-id: [CMP-001]
+    entity-id: [ENT-001]
+    api-id: [API-EXT-001]
+  trigger: "A Slack event mentioning the bot is received."
+  logic: "IF InboundMention.is-bot-author = true THEN ignore the event (no processing, no reply) ELSE continue."
+  violation: "Silently ignore — prevents answer→re-trigger loops (FR-20)."
+  source:
+    requirements: [FR-20]
+    stories: [S-21]
+
+- id: BR-003
+  statement: "Only messages that actually @mention the bot are routed for processing."
+  category: validation
+  applies-to:
+    component-id: [CMP-001]
+    entity-id: [ENT-001]
+    api-id: [API-EXT-001]
+  trigger: "A Slack message event is received (the channel allowlist is a separate gate evaluated in BR-001; per W1 the @mention check runs before the allowlist check)."
+  logic: "IF the message does not contain a valid @mention of the bot THEN ignore it ELSE parse the mention into an InboundMention and continue."
+  violation: "Silently ignore (no processing, no reply)."
+  source:
+    requirements: [FR-1]
+    stories: [S-1]
+
+- id: BR-004
+  statement: "Every accepted mention is acknowledged in-thread before the full answer, and the Slack delivery is acknowledged within the synchronous window."
+  category: policy
+  applies-to:
+    component-id: [CMP-001]
+    entity-id: [ENT-001, ENT-008]
+    api-id: [API-EXT-001, API-INT-002]
+  trigger: "An InboundMention passes BR-001..BR-003 and is registered as a new job (BR-010)."
+  logic: "IF a new job is registered THEN post an in-thread acknowledgement, return Slack HTTP 200 within the NFR-1 window (named parameter; p95 target set in nfr-design), and enqueue the job across the C-1 internal seam for async processing."
+  violation: "Degrade — if ack cannot be posted, the enqueue still occurs so the worker can resolve the job; failing to ack within the window risks a Slack redelivery, absorbed by de-dup (BR-010)."
+  source:
+    requirements: [FR-3, NFR-1]
+    stories: [S-2]
+
+# --- Conversation context & input size (CMP-002 / CMP-001) ---------------------
+
+- id: BR-005
+  statement: "Conversation context is thread-scoped and reconstructed by fetching thread replies at request time; it is never persisted to a durable cross-session store."
+  category: constraint
+  applies-to:
+    component-id: [CMP-002, CMP-001]
+    entity-id: [ENT-003]
+    api-id: [API-EXT-002, API-INT-005]
+  trigger: "The worker begins processing a job and needs prior thread context."
+  logic: "IF processing a job THEN fetch the originating thread's replies via CMP-001 (fetch-not-store, CS-6) and assemble ConversationContext for THIS thread only; do NOT carry context across threads and do NOT write context to any durable store (A-8/OOS-4). When the mention is a top-level channel message (InboundMention.thread-ts is null), the context is just the originating message itself as its own single-message context (M-5)."
+  violation: "Reject any attempt to persist conversation context — durable conversation memory is out of scope (OOS-4)."
+  source:
+    requirements: [FR-4]
+    stories: [S-13]
+
+- id: BR-006
+  statement: "Thread context fetch contributes to the shared latency budget and the rate-limit surface."
+  category: policy
+  applies-to:
+    component-id: [CMP-002, CMP-004]
+    entity-id: [ENT-003]
+  trigger: "ConversationContext is being assembled and during MCP grounding."
+  logic: "The NFR-2 p95 ≤ 30s budget is shared across thread-history fetch (CS-6), MCP round-trips, and the inference loop; the per-request timeout and tool-call cap (BR-014) bound the total (CS-5)."
+  violation: "Degrade — on budget/timeout exhaustion route to the failure path (BR-013)."
+  source:
+    requirements: [FR-4, NFR-2]
+    stories: [S-13, S-24]
+
+- id: BR-007
+  statement: "Oversized assembled input is never silently truncated; it is either truncated with an in-thread notice or rejected with a clear 'input too large' message."
+  category: validation
+  applies-to:
+    component-id: [CMP-002]
+    entity-id: [ENT-003, ENT-008]
+  trigger: "ConversationContext.assembled-prompt-input is prepared."
+  logic: "IF assembled-prompt-input exceeds the configured max input size (FR-21/A-9; concrete limit + truncate-vs-reject strategy set in nfr-design) THEN set within-size-budget=false and either (truncate + post an in-thread notice) or (post 'input too large' and resolve the job as failed) — never truncate silently ELSE within-size-budget=true and proceed."
+  violation: "Degrade or reject with notice (routes to BR-013 when rejected); never silent."
+  source:
+    requirements: [FR-21]
+    stories: [S-22]
+
+# --- Cost guardrail (CMP-007 / CMP-008) ----------------------------------------
+
+- id: BR-008
+  statement: "A request must be within the cost budget before any spend; a denial routes to the failure path."
+  category: policy
+  applies-to:
+    component-id: [CMP-007, CMP-008, CMP-002]
+    entity-id: [ENT-011, ENT-014]
+    api-id: [API-INT-006]
+  trigger: "The worker is ready to spend on inference/MCP (after the safety gate, BR-012)."
+  logic: "IF UsageCounter.usage-count for the current period ≥ GuardrailConfig.per-period-limit (or a per-request bound would be exceeded) THEN deny — route the job to the failure path with a clear in-thread message that states the budget is exhausted and invites the developer to re-ask after the budget period resets (M-1) ELSE permit the spend."
+  violation: "Reject (budget-deny) → job resolved as failed via BR-013. Prevents runaway cost (NFR-8)."
+  source:
+    requirements: [NFR-8]
+    stories: [S-18]
+
+# --- Grounding & citations (CMP-004 / CMP-002) ---------------------------------
+
+- id: BR-009
+  statement: "AWS-fact answers are grounded in MCP-returned sources; when no source is available the answer is marked ungrounded, never fabricated."
+  category: constraint
+  applies-to:
+    component-id: [CMP-002, CMP-004]
+    entity-id: [ENT-004, ENT-006]
+    api-id: [API-EXT-004, API-INT-004]
+  trigger: "Composing an answer that relies on AWS facts."
+  logic: "IF MCP returns ≥1 GroundingSource THEN incorporate them and set Answer.is-grounded=true ELSE set Answer.is-grounded=false and explicitly state the answer is ungrounded — citations are NEVER invented (A-2)."
+  violation: "Reject any fabricated citation; mark ungrounded instead."
+  source:
+    requirements: [FR-6, FR-7]
+    stories: [S-4, S-5]
+
+# --- De-duplication & job lifecycle (CMP-006) ----------------------------------
+
+- id: BR-010
+  statement: "Processing is at-most-once per de-dup identity; a redelivered or re-enqueued identity attaches to the existing job rather than starting a second."
+  category: constraint
+  applies-to:
+    component-id: [CMP-006, CMP-001]
+    entity-id: [ENT-008]
+    api-id: [API-INT-002]
+  trigger: "CMP-001 registers an InboundMention at intake, or the worker dequeues a job."
+  logic: "Compute slack-event-identity = (channel-id, message-ts) (Q3). IF a ProcessingJob with that identity already exists THEN do not create a second job and do not post a second ack/answer; act on the existing job's status ELSE create a new job in status=seen."
+  violation: "Reject the duplicate (no second job, no second answer). Absorbs Slack at-least-once redelivery (slack-retry-num) and intake→worker re-enqueue."
+  source:
+    requirements: [FR-19]
+    stories: [S-20]
+
+- id: BR-011
+  statement: "De-duplication is at-most-once COMPLETED processing, not at-most-once seen — a job that was seen/in-progress but never resolved may be (re)processed."
+  category: constraint
+  applies-to:
+    component-id: [CMP-006]
+    entity-id: [ENT-008]
+  trigger: "A job with an existing identity is encountered (BR-010) or recovery runs (BR-021)."
+  logic: "IF existing job.status IN {resolved, failed} THEN it is complete — do nothing further ELSE (status IN {seen, in-progress}) the question is not yet answered, so the job remains eligible for (re)processing (reconciles S-20 de-dup with S-19 recovery, CS-3)."
+  violation: "Reject only completed-duplicate work; never permanently drop an unanswered question."
+  source:
+    requirements: [FR-19, FR-17]
+    stories: [S-19, S-20]
+
+# --- Safety gate ordering (CMP-005) — CS-4 -------------------------------------
+
+- id: BR-012
+  statement: "The safety scan runs on assembled input BEFORE any inference or MCP call; flagged input that resolves to refuse is never forwarded to inference or MCP."
+  category: authorization
+  applies-to:
+    component-id: [CMP-002, CMP-005]
+    entity-id: [ENT-007, ENT-003, ENT-005, ENT-006]
+    api-id: [API-INT-003]
+  trigger: "ConversationContext.assembled-prompt-input is ready, before the cost check and inference loop."
+  logic: "Submit assembled-prompt-input to CMP-005 FIRST. IF SafetyVerdict.recommended-action = refuse THEN do not forward to inference (ENT-005) or MCP (ENT-006); warn the user and resolve the job per the failure path ELSE IF = warn THEN post a warning and proceed ELSE (allow) proceed. Ordering is mandatory (CS-4)."
+  violation: "Reject — forwarding flagged input to inference/MCP violates NFR-4; must be blocked (BR-012 is a hard gate)."
+  source:
+    requirements: [FR-15, NFR-4]
+    stories: [S-16]
+
+# --- Failure resolution & in-flight recovery (CMP-002 / CMP-006) — CS-2 --------
+
+- id: BR-013
+  statement: "Inference/MCP failure, timeout, budget-deny, or oversize-reject resolves the job with a clear in-thread message — never silence, never a dangling acknowledgement."
+  category: policy
+  applies-to:
+    component-id: [CMP-002, CMP-001, CMP-006]
+    entity-id: [ENT-008, ENT-004]
+    api-id: [API-EXT-003]
+  trigger: "A typed inference/MCP failure or timeout, a BR-008 budget-deny, or a BR-007 oversize-reject occurs during processing."
+  logic: "IF a terminal processing error occurs THEN post a clear failure/retry message in the originating thread (resolving the FR-3 ack) and transition the job to status=failed."
+  violation: "Reject silent failure — the acknowledgement must always be resolved by an answer or a failure message."
+  source:
+    requirements: [FR-17]
+    stories: [S-19, S-22]
+
+- id: BR-014
+  statement: "The agent loop runs under a hard tool-call/iteration cap and a per-request timeout; exceeding either routes to the failure path."
+  category: constraint
+  applies-to:
+    component-id: [CMP-002, CMP-003, CMP-004]
+    entity-id: [ENT-005, ENT-006]
+  trigger: "Each iteration of the inference + MCP grounding loop."
+  logic: "IF tool-call iterations reach the CS-5 cap OR the per-request timeout elapses (both named parameters; values set in nfr-design) THEN stop the loop and route to the failure path (BR-013) ELSE continue iterating."
+  violation: "Degrade — stop and fail gracefully; iteration count (not just dependency timeout) is the runaway guard (CS-5)."
+  source:
+    requirements: [FR-5, FR-6, NFR-2]
+    stories: [S-3, S-4, S-24]
+
+- id: BR-021
+  statement: "A job acked but neither resolved nor failed when its worker is lost is detected and made eligible for retry-or-abandon."
+  category: constraint
+  applies-to:
+    component-id: [CMP-006]
+    entity-id: [ENT-008]
+  trigger: "In-flight recovery scan (e.g. a job stuck in seen/in-progress past a staleness bound on last-transition-at)."
+  logic: "IF job.status IN {seen, in-progress} AND last-transition-at is older than the staleness bound (named parameter, set in nfr-design) THEN the worker is presumed lost — re-enter in-progress and increment attempt-count (subject to BR-022)."
+  violation: "Degrade — recover rather than leave the job permanently silent (CS-2)."
+  source:
+    requirements: [FR-17]
+    stories: [S-19]
+
+- id: BR-022
+  statement: "Retries are bounded; a job that exhausts the max-attempt limit is abandoned to a failure-resolved terminal state."
+  category: constraint
+  applies-to:
+    component-id: [CMP-006, CMP-002]
+    entity-id: [ENT-008]
+  trigger: "A job becomes eligible for retry (BR-021) or a processing attempt fails (BR-013)."
+  logic: "IF attempt-count ≥ max-attempt limit (named parameter; value set in nfr-design) THEN transition to status=failed and post the failure message (BR-013) ELSE allow another in-progress attempt."
+  violation: "Reject unbounded retries; abandon-to-failed once the limit is reached (CS-2)."
+  source:
+    requirements: [FR-17]
+    stories: [S-19]
+
+- id: BR-027
+  statement: "The transition into `in-progress` is single-winner, and answer posting is idempotent per job identity, so a slow-but-alive worker and a recovery-spawned worker can never both post for the same job."
+  category: constraint
+  applies-to:
+    component-id: [CMP-006, CMP-002]
+    entity-id: [ENT-008, ENT-004]
+  trigger: "A worker (initial dequeue or BR-021 recovery re-enqueue) attempts to take a job in-progress, or attempts to post the composed Answer / failure message in-thread (W2 step 10)."
+  logic: "Entering `in-progress` MUST be a single-winner operation — a lease / compare-and-set keyed on (job-id, attempt-count or last-transition-at): exactly one worker acquires the attempt; any other worker observing the same job MUST yield rather than process in parallel. Posting the Answer (or failure message) back to the thread MUST be idempotent per job identity (Answer.correlation-id == ProcessingJob.job-id): a re-attempt MUST NOT produce a second in-thread post. The concrete mechanism (lease TTL, CAS column, dedup post-key) is deferred to infrastructure-design; the guarantee shape is fixed here."
+  violation: "Reject double-processing — at most one worker may hold a job in-progress and at most one answer may be posted per job (CS-3 at-most-once-completed); duplicate posting is a defect, not a degrade."
+  source:
+    requirements: [FR-17, FR-19]
+    stories: [S-19, S-20, S-24]
+
+# --- External rate-limit handling (CMP-001 / CMP-004) — NFR-7 ------------------
+
+- id: BR-023
+  statement: "Slack and MCP rate limits / backpressure are handled by retry-with-backoff; no question is crashed or dropped silently."
+  category: policy
+  applies-to:
+    component-id: [CMP-001, CMP-004]
+    entity-id: [ENT-006]
+    api-id: [API-EXT-002, API-EXT-004, API-INT-004]
+  trigger: "Slack or MCP returns a rate-limit / backpressure response."
+  logic: "IF a rate-limit/backpressure signal is received THEN retry with backoff (parameters set in nfr-design) ELSE proceed; if retries are exhausted, surface via the failure path (BR-013) rather than crashing or dropping."
+  violation: "Degrade — back off and retry, then fail gracefully; never silent drop or crash."
+  source:
+    requirements: [NFR-7]
+    stories: [S-23]
+
+# --- Answer composition (CMP-002) ----------------------------------------------
+
+- id: BR-015
+  statement: "Architecture-review and solution-design answers contain a recommendation, rationale, trade-offs, and an alternative where applicable; the question type is captured on the Answer before composition."
+  category: validation
+  applies-to:
+    component-id: [CMP-002]
+    entity-id: [ENT-004]
+  trigger: "The agent worker classifies the question and composes an answer (W2)."
+  logic: "BEFORE composition the worker sets Answer.answer-type (architecture-review | solution-design | cost | troubleshooting | factual); when classification is uncertain it falls back to `factual` (best-effort, FR-9/FR-10 detection is heuristic). IF Answer.answer-type IN {architecture-review, solution-design} THEN Answer MUST include recommendation + rationale + trade-offs, and an alternative where one is meaningful (may be omitted otherwise) ELSE (cost | troubleshooting | factual) recommendation + rationale are required, the rest optional."
+  violation: "Reject an architecture-review/solution-design answer that is missing trade-offs (FR-8). Keying on the modelled answer-type makes this branch mechanically verifiable (resolves PM F-2)."
+  source:
+    requirements: [FR-8, FR-9, FR-10, FR-11, FR-12]
+    stories: [S-7, S-8, S-12]
+
+- id: BR-016
+  statement: "Citation presence is consistent with the grounded flag: grounded answers carry ≥1 citation; ungrounded answers carry none and an explicit ungrounded marker."
+  category: validation
+  applies-to:
+    component-id: [CMP-002]
+    entity-id: [ENT-004, ENT-006]
+  trigger: "Finalising an Answer before posting."
+  logic: "IF Answer.is-grounded=true THEN citations MUST be non-empty ELSE citations MUST be empty AND the rendered text MUST state the answer is ungrounded."
+  violation: "Reject the inconsistent answer (grounded-without-citation or citation-without-grounding) (FR-7/A-2)."
+  source:
+    requirements: [FR-7]
+    stories: [S-5]
+
+- id: BR-017
+  statement: "Generated IaC/code is provided as advice only and is never executed, applied, or deployed."
+  category: constraint
+  applies-to:
+    component-id: [CMP-002]
+    entity-id: [ENT-004]
+  trigger: "An answer includes code-snippets (Terraform / AWS CDK / AWS SAM) per FR-13."
+  logic: "IF the developer requested buildable output THEN return snippets in a Slack code block; the bot MUST NOT execute, apply, or deploy them or mutate any AWS resource (OOS-3)."
+  violation: "Reject any execution/deployment of generated artifacts — hard out-of-scope boundary (OOS-3)."
+  source:
+    requirements: [FR-13]
+    stories: [S-11]
+
+# --- Feedback capture & aggregation (CMP-001 / CMP-007) — Q4 -------------------
+
+- id: BR-018
+  statement: "Only 👍/👎 reactions on messages the bot posted as answers are captured and forwarded as feedback; the answer is resolved by message timestamp to its correlation-id."
+  category: validation
+  applies-to:
+    component-id: [CMP-001, CMP-007]
+    entity-id: [ENT-002, ENT-010]
+    api-id: [API-EXT-005, API-INT-007]
+  trigger: "A Slack reaction add/remove event is received."
+  logic: "IF the reaction is 👍/👎 on a bot-posted answer THEN normalise to reaction-kind, resolve answer-message-ts → Answer.correlation-id, and forward a ReactionEvent (with event-action add/remove) to CMP-007 ELSE ignore the reaction."
+  violation: "Silently ignore non-👍/👎 reactions and reactions on non-answer messages."
+  source:
+    requirements: [FR-16]
+    stories: [S-25, S-26]
+
+- id: BR-019
+  statement: "Adoption metrics and inference/MCP usage are recorded after processing; usage increments the per-period counter used by the budget decision."
+  category: calculation
+  applies-to:
+    component-id: [CMP-007, CMP-002, CMP-003]
+    entity-id: [ENT-009, ENT-011, ENT-005]
+    api-id: [API-INT-006]
+  trigger: "A job reaches a terminal state (resolved or failed) and after each inference/MCP exchange."
+  logic: "On processing, increment UsageCounter.usage-count by the reported token-usage/calls; on a resolved answer, update AdoptionMetric (distinct-developers by author-id, questions-handled) for the period. Counter increments MUST be atomic across concurrent workers (CS-1/S-24)."
+  violation: "Degrade — a recording failure must not block the answer, but the usage counter must not be undercounted (correctness-critical for NFR-8)."
+  source:
+    requirements: [FR-18, NFR-8]
+    stories: [S-18, S-27]
+
+- id: BR-020
+  statement: "FeedbackSignal is an append-only log; the success metric resolves each emoji independently — latest row per (answer, reactor, signal) — so a withdrawn 👎 does not erase a still-present 👍."
+  category: calculation
+  applies-to:
+    component-id: [CMP-007]
+    entity-id: [ENT-010]
+  trigger: "A ReactionEvent is recorded (append), and when the success metric is computed (aggregate)."
+  logic: "On capture, APPEND an immutable FeedbackSignal row (answer-ref, reactor-id, signal, event-action, recorded-at) — never update/delete (Q4). On aggregation, for each (answer-ref, reactor-id, signal) triple take the row with the greatest recorded-at: that signal is PRESENT iff its latest row is event-action=added, WITHDRAWN iff event-action=removed. The reactor's net signal for an answer is then derived from the still-present signals (e.g. a developer holding 👍 after withdrawing 👎 still counts as positive). A simple 👍→👎 reversal is captured because the 👍 triple's latest row becomes `removed` while the 👎 triple's latest row is `added`."
+  violation: "Reject destructive updates on the hot path; correctness depends on read-time per-(answer,reactor,signal) latest aggregation — collapsing to a per-reactor key would misreport mixed/withdrawn reactions (PM F-1)."
+  source:
+    requirements: [FR-16, FR-18]
+    stories: [S-26]
+
+# --- Configuration & policy (CMP-008) ------------------------------------------
+
+- id: BR-024
+  statement: "Configuration (allowlist, usage policy, guardrail thresholds) is operator-set and read-only to all consuming components."
+  category: authorization
+  applies-to:
+    component-id: [CMP-008, CMP-001, CMP-002, CMP-007]
+    entity-id: [ENT-012, ENT-013, ENT-014]
+    api-id: [API-INT-008]
+  trigger: "Any component reads configuration during intake or processing."
+  logic: "Consumers (CMP-001 allowlist, CMP-002 usage-policy/limits, CMP-007 guardrail threshold) READ configuration only; only operators mutate it (S-15/S-17/S-18). Enforcement of each value lives in the consumer, not in CMP-008."
+  violation: "Reject any runtime write to configuration by a non-operator component."
+  source:
+    requirements: [FR-2, NFR-3, NFR-8]
+    stories: [S-15, S-17, S-18]
+
+- id: BR-025
+  statement: "The data-sensitivity usage policy is published to developers and is enforced in part by the secret-detection gate."
+  category: policy
+  applies-to:
+    component-id: [CMP-008, CMP-005]
+    entity-id: [ENT-013, ENT-007]
+  trigger: "Operator publishes the policy; runtime input is scanned."
+  logic: "The published UsagePolicy.policy-text prohibits secrets/credentials/PII/customer data (NFR-3); the BR-012 safety gate (FR-15/S-16) is the partial runtime enforcement of that policy."
+  violation: "Warn — policy is advisory to users but backed at runtime by the BR-012 hard gate."
+  source:
+    requirements: [NFR-3]
+    stories: [S-17]
+
+# --- Cross-cutting logging hygiene (NFR-6) -------------------------------------
+
+- id: BR-026
+  statement: "Operational logs and metrics contain no secrets, credentials, or user-pasted PII; correlation-id is used for tracing instead of raw content."
+  category: constraint
+  applies-to:
+    component-id: [CMP-001, CMP-002, CMP-005, CMP-007]
+    entity-id: [ENT-001, ENT-007, ENT-009, ENT-010]
+  trigger: "Any component emits a log line or records a metric."
+  logic: "Log by correlation-id (DA-1) and redacted descriptors only; SafetyVerdict.findings are redacted match descriptors, never raw secret values; durable aggregates store no conversation content (A-8)."
+  violation: "Reject logging of raw secrets/PII (NFR-6)."
+  source:
+    requirements: [NFR-6]
+    stories: [S-16, S-26, S-27]

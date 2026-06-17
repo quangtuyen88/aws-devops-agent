@@ -1,0 +1,390 @@
+# Non-Functional Requirements — Slack DevOps Agent (UNIT-001)
+# Intent: intent-001-slack-devops-agent · Stage: nfr-design (construction) · Unit: UNIT-001
+# Owner: aidlc-systems-architect-agent · Source of truth for measurable NFR targets.
+#
+# Human decisions applied (questions.md, answered 2026-06-17T13:38:12+08:00 — "go with
+# recommendations"): Q1=a, Q2=b, Q3=a, Q4=b, Q5=c. Architecture-authority choices from
+# plan.md R-1..R-6 applied (Python 3.12 + Slack Bolt; async/idempotent worker;
+# retry+backoff+circuit-breaker+time-budget; observability-as-NFR-verification).
+#
+# ID DISCIPLINE: NFR-1..NFR-10 are copied forward from
+# requirements-analysis/requirements.md and EXPANDED IN PLACE (deferred placeholders
+# A-3/A-6/A-7/A-9 resolved with concrete numbers + verification). NO id renamed.
+# NFR-11..NFR-21 are NEW rows continuing the NFR-* sequence for gaps surfaced here
+# (heartbeat, cost caps, input-size budget, resilience parameters, recovery bounds,
+# observability instruments, detection rule set).
+# NOTE: NFR-18 is intentionally UNUSED — the adoption-metric concern (FR-18) it would
+# have carried was folded into NFR-20 (observability adoption counters). The published
+# IDs NFR-11..17, 19, 20, 21 are preserved as-is; the gap at NFR-18 is deliberate, not a
+# dropped requirement. (See id_sequence_note below.)
+#
+# status legend:
+#   finalized                    — concrete value fixed here; nothing left downstream.
+#   policy-fixed-value-handed-off — the POLICY/target/shape is fixed here; one concrete
+#                                   number is finalised in infrastructure-design against
+#                                   the chosen model/runtime. deferred-to names the stage.
+#
+# All starting numeric values marked `tunable: true` are operator- or infra-adjustable
+# defaults proposed by the owner; they are real, verifiable defaults, not placeholders.
+
+meta:
+  unit: UNIT-001
+  stage: nfr-design
+  owner: aidlc-systems-architect-agent
+  reviewer: aidlc-architecture-reviewer-agent
+  source_of_truth_for: "measurable NFR targets + verification methods"
+  decisions_applied:
+    Q1: "a — full-answer SLO stays p95 <= 30s; add ~15s heartbeat (NFR-2, NFR-11)"
+    Q2: "b — per-request cap + per-period SOFT budget, graceful degrade (NFR-12, NFR-13)"
+    Q3: "a — business-hours best-effort ~99%, dependency-bounded (NFR-9)"
+    Q4: "b — hard-refuse-and-re-ask, name matched class, no override (NFR-4, NFR-21)"
+    Q5: "c — hybrid trim-with-notice / reject-when-question-alone-overflows (NFR-14)"
+
+nfrs:
+
+  # ============================ LATENCY ====================================
+  - id: NFR-1
+    name: "Acknowledgement latency"
+    category: performance
+    target:
+      metric: "p95 ack latency"
+      value: "< 3s"
+      note: "Fixed by Slack's ~3s synchronous-response/retry window (C-1); not negotiable."
+    measure: "Time from Slack event receipt at CMP-001 to in-thread ack post + HTTP 200."
+    verification: "Latency histogram on the intake path (NFR-20); load test asserting p95 < 3s under target concurrency."
+    source: { requirements: [FR-3], constraints: [C-1], stories: [S-2] }
+    owner_component: CMP-001
+    status: finalized
+
+  - id: NFR-2
+    name: "Full-answer latency"
+    category: performance
+    target:
+      metric: "p95 full-answer latency"
+      value: "<= 30s"
+      note: "A-3 working default CONFIRMED here (Q1=a). Measured from accepted question to posted answer. The hard per-request wall-clock budget that enforces this is NFR-17."
+    measure: "Time from job accepted (enqueued, W1) to Answer posted in-thread (W2 step 10)."
+    verification: "Full-answer latency histogram (NFR-20); scenario tests for the multi-tool grounded path (FR-9 architecture review) asserting p95 <= 30s."
+    source: { requirements: [FR-14], assumptions: [A-3], stories: [S-6], resolves: [A-3] }
+    owner_component: CMP-002
+    status: finalized
+
+  - id: NFR-11
+    name: "Long-answer progress heartbeat"
+    category: usability
+    target:
+      metric: "first heartbeat + cadence"
+      value: "post a 'still working…' in-thread update at 15s, repeat every 15s until job reaches resolved|failed"
+      tunable: true
+    measure: "Heartbeat posted when a job exceeds 15s in in-progress without a terminal transition."
+    verification: "Unit test on the worker timer; manual check that a slow grounded answer shows a heartbeat, not a bare ack."
+    rationale: "Decouples PERCEIVED latency from the NFR-2 SLO (Q1=a). Additive UX rule; does not change the SLO."
+    source: { requirements: [FR-3, FR-14], decision: "Q1=a" }
+    owner_component: CMP-002
+    status: finalized
+
+  - id: NFR-17
+    name: "Per-request total time budget (answer wall clock)"
+    category: reliability
+    target:
+      metric: "hard per-request wall-clock budget"
+      value: "30s, aligned to the NFR-2 SLO"
+      tunable: true
+      note: "On exhaustion the job resolves `failed` (BR-013) with an FR-17 in-thread message. The budget bounds the WHOLE W2 pipeline: context fetch + safety gate + budget check + agent loop (NFR-12 caps) + composition + post. All NFR-15 retries occur WITHIN this budget."
+    measure: "Wall-clock from in-progress transition to terminal; jobs exceeding the budget transition to `failed` with cause=timeout."
+    verification: "Fault-injection test: a stalled inference/MCP call must trip the budget and produce the FR-17 message + failure-by-cause=timeout metric (NFR-20)."
+    source: { requirements: [FR-17], constraints: [], nfrs: [NFR-2], rules: [BR-013, BR-014] }
+    owner_component: CMP-002
+    status: finalized
+
+  # ============================ DATA-SENSITIVITY / SAFETY ==================
+  - id: NFR-3
+    name: "Data-sensitivity policy"
+    category: security
+    target:
+      metric: "published usage policy"
+      value: "Operator-published policy text (ENT-013): internal/non-production content only; no secrets, credentials, PII, or customer data. Enforced in part by FR-15 / NFR-4 / NFR-21."
+    measure: "Policy text exists in CMP-008 config and is published to a known location (ENT-013.published-location-ref)."
+    verification: "Config review; confirm published-location-ref resolves; confirm CMP-005 gate references the policy (BR-025)."
+    source: { requirements: [FR-15], stories: [S-17], rules: [BR-025] }
+    owner_component: CMP-008
+    status: finalized
+
+  - id: NFR-4
+    name: "Secret non-propagation (invariant)"
+    category: security
+    target:
+      metric: "flagged-input forwarding"
+      value: "ZERO — input flagged by FR-15/CMP-005 is NEVER forwarded to inference (CMP-003) or MCP (CMP-004). NO user override path (Q4=b). On positive detection: hard-refuse-and-re-ask (see NFR-21)."
+    measure: "For every input with recommended-action=refuse, count of downstream inference/MCP sends = 0."
+    verification: "Test corpus of known secret patterns (NFR-21 rule set) asserting no external send occurs and the refuse message is posted (CS-4 ordering: gate runs before any send)."
+    source: { requirements: [FR-15], constraints: [CS-4], rules: [BR-012], decision: "Q4=b (no override; NFR-4 invariant preserved)" }
+    owner_component: CMP-005
+    status: finalized
+
+  - id: NFR-21
+    name: "Secret/credential detection rule set & posture"
+    category: security
+    target:
+      metric: "detection posture + starting rule set + behaviour"
+      posture: "best-effort heuristic (A-6); hard-refuse-and-re-ask, naming the matched pattern CLASS, never echoing the secret value (NFR-6). No override."
+      warn_branch: "Under Q4=b the secret detector is REFUSE-OR-ALLOW only: a positive detection always yields recommended-action=refuse and never `warn` (the BR `warn ⇒ post-and-proceed` path is not emitted by this detector), so the NFR-4 zero-forwarding invariant has no `warn` exception."
+      starting_rule_set:
+        - "AWS access key id: /\\bAKIA[0-9A-Z]{16}\\b/ (and ASIA/AGPA/AIDA prefixes)"
+        - "AWS secret access key: 40-char base64-ish high-entropy token in key context"
+        - "PEM private key block: '-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----'"
+        - "Bearer / OAuth token: /(?i)bearer\\s+[A-Za-z0-9._-]{20,}/"
+        - "Slack token: /xox[baprs]-[0-9A-Za-z-]{10,}/"
+        - "Connection string with embedded credentials: 'scheme://user:password@host'"
+        - "Generic high-entropy assignment near keywords: password|secret|token|apikey|api_key"
+      tunable: true
+    measure: "Recommended-action returned per input; matched-class names emitted (redacted) in the refuse message (ENT-007.findings)."
+    verification: "Precision/recall measured against a labelled fixture corpus of positives + benign look-alikes; documented known limits (false negatives on novel formats; false positives on benign high-entropy strings)."
+    known_limits: "Heuristic only — will miss novel/obfuscated secrets and may flag benign high-entropy strings. Rules evolve on their own cadence (A-6) inside CMP-005; not a guarantee of completeness."
+    source: { requirements: [FR-15, NFR-6], assumptions: [A-6], rules: [BR-012, BR-025, BR-026], decision: "Q4=b", resolves: [A-6] }
+    owner_component: CMP-005
+    status: finalized
+
+  # ============================ CREDENTIALS / LOG HYGIENE ==================
+  - id: NFR-5
+    name: "Credential security & least privilege"
+    category: security
+    target:
+      metric: "secret storage + scope"
+      value: "Slack, inference (Kiro/Bedrock), and MCP credentials stored in a secret manager (never hardcoded/committed); each integration granted least-privilege scopes only. Concrete secret-manager + scopes finalised in infrastructure-design."
+    measure: "No credential literals in source/config; each integration's granted scope == required scope."
+    verification: "Config review + secret-scanning in CI (bandit / git-secrets); IAM/scope review at infrastructure-design."
+    source: { requirements: [], security_baseline: true }
+    owner_component: CMP-008
+    status: policy-fixed-value-handed-off
+    deferred_to: infrastructure-design
+
+  - id: NFR-6
+    name: "No secrets/PII in logs"
+    category: security
+    target:
+      metric: "log content"
+      value: "Operational logs/metrics contain NO secrets, credentials, or user-pasted PII. Logs are structured JSON keyed by correlation-id (BR-026); detection findings are redacted descriptors (ENT-007.findings), never raw values."
+    measure: "Log inspection against the NFR-21 test corpus shows zero raw secret/PII values."
+    verification: "Automated log-scrub test: feed known-secret inputs, assert logs contain correlation-id + redacted class only; manual log review."
+    source: { requirements: [], rules: [BR-026], data_attrs: ["ENT-001.correlation-id"] }
+    owner_component: "CMP-001, CMP-002, CMP-005, CMP-007"
+    status: finalized
+
+  # ============================ RATE-LIMIT / RESILIENCE ====================
+  - id: NFR-7
+    name: "External rate-limit handling"
+    category: reliability
+    target:
+      metric: "backpressure handling"
+      value: "Slack and MCP rate limits / backpressure handled by bounded retry-with-backoff (NFR-15) honouring Slack Retry-After / HTTP 429; a question is NEVER dropped silently — if it cannot be serviced within the NFR-17 budget it resolves `failed` with an FR-17 message."
+    measure: "Under simulated 429/backpressure: 0 crashes, 0 silent drops; every request reaches resolved or failed."
+    verification: "Simulated rate-limit responses on Slack/MCP/inference; assert backoff curve (NFR-15) and graceful failure (BR-023)."
+    source: { requirements: [FR-17], rules: [BR-023], stories: [S-23] }
+    owner_component: "CMP-001, CMP-004, CMP-002"
+    status: finalized
+
+  - id: NFR-15
+    name: "Retry / backoff parameters"
+    category: reliability
+    target:
+      metric: "retry policy on Slack/MCP/inference calls"
+      value:
+        strategy: "exponential backoff with full jitter"
+        base_delay: "500ms"
+        multiplier: 2
+        max_retries: 3            # 4 total attempts per external call
+        max_delay_cap: "8s"
+        honour_retry_after: true  # Slack Retry-After / 429 overrides computed delay
+        within_budget: "all retries occur inside the NFR-17 per-request budget; exhaustion -> NFR-7 graceful failure"
+      tunable: true
+    measure: "Observed retry count + inter-attempt delays per external call."
+    verification: "Unit test of the backoff function (jitter bounds, cap, Retry-After precedence); integration test under injected transient failures."
+    source: { requirements: [FR-17], rules: [BR-023], nfrs: [NFR-7] }
+    owner_component: "CMP-002, CMP-004, CMP-001"
+    status: finalized
+
+  - id: NFR-16
+    name: "Circuit breaker per external dependency"
+    category: reliability
+    target:
+      metric: "breaker policy (per dependency: Slack API, inference backend, MCP server)"
+      value:
+        open_threshold: "5 consecutive failures OR >=50% failure rate over a rolling 20-call window"
+        open_duration: "30s before half-open probe"
+        half_open: "single probe; success -> closed, failure -> re-open"
+        on_open: "fail fast to the FR-17 message instead of burning the NFR-17 latency budget"
+      tunable: true
+    measure: "Breaker state transitions; fraction of fast-failed requests during a simulated dependency outage."
+    verification: "Sustained-outage fault injection per dependency; assert breaker opens, requests fail fast (<1s) with FR-17, and breaker-state gauge (NFR-20) reflects state."
+    rationale: "A sustained external outage must not consume the whole NFR-17 budget per request (NFR-9 is dependency-bounded; failures are reported, not retried indefinitely)."
+    source: { requirements: [FR-17], constraints: [C-3], nfrs: [NFR-9, NFR-17] }
+    owner_component: CMP-002
+    status: finalized
+
+  # ============================ COST GUARDRAIL =============================
+  - id: NFR-8
+    name: "Inference/MCP cost guardrail"
+    category: cost
+    target:
+      metric: "two-lever guardrail (Q2=b)"
+      value: "A per-request cap (NFR-12) PLUS a per-period rolling SOFT budget (NFR-13). CMP-007 owns the within-budget decision (CS-1); thresholds are operator-set in ENT-014 (GuardrailConfig)."
+    measure: "Every request bounded by NFR-12; workspace usage tracked against NFR-13 per UsageCounter (ENT-011)."
+    verification: "See NFR-12 and NFR-13 verification."
+    source: { requirements: [], assumptions: [A-7], constraints: [CS-1, CS-5], rules: [BR-008], decision: "Q2=b", resolves: [A-7] }
+    owner_component: CMP-007
+    status: finalized
+
+  - id: NFR-12
+    name: "Per-request cost cap"
+    category: cost
+    target:
+      metric: "max external calls per question (== CS-5 tool-call cap)"
+      value:
+        max_inference_calls: 2
+        max_mcp_tool_calls: 5
+        on_exceed: "stop the agent loop; resolve `failed` with a clear in-thread message (BR-014/BR-013)"
+      tunable: true
+    measure: "Inference-call count + MCP-call count per ProcessingJob (from InferenceExchange / GroundingSource records)."
+    verification: "Unit test: a loop that would exceed the cap is halted and the job fails with cause=budget/cap; metric failure-by-cause=cap increments (NFR-20)."
+    source: { constraints: [CS-5], assumptions: [A-7], rules: [BR-014], decision: "Q2=b" }
+    owner_component: CMP-002
+    status: finalized
+
+  - id: NFR-13
+    name: "Per-period soft budget (volume backstop)"
+    category: cost
+    target:
+      metric: "rolling workspace request budget"
+      value:
+        default_budget: "500 questions per rolling 24h (workspace-wide)"
+        period_definition: "rolling 24h"
+        on_exceed: "GRACEFUL DEGRADE — reply 'daily capacity reached, try later' and invite re-ask after reset (M-1); do NOT hard-fail silently and do NOT hard-stop the service"
+      tunable: true
+      note: "SOFT cap (Q2=b). Concrete default tuned to expected weekly question volume; operator-set in ENT-014. Counter is correctness-critical (ENT-011, BR-019 atomic increments)."
+    measure: "UsageCounter.usage-count vs GuardrailConfig.per-period-limit; count of degraded responses per period."
+    verification: "Test that crossing the budget yields the degrade message (not a crash/hard-stop); concurrency test that increments are atomic (no double-count / lost update)."
+    source: { requirements: [], assumptions: [A-7], constraints: [CS-1], rules: [BR-008, BR-019], stories: [S-18], decision: "Q2=b" }
+    owner_component: CMP-007
+    status: finalized
+
+  # ============================ AVAILABILITY ===============================
+  - id: NFR-9
+    name: "Availability (dependency-bounded)"
+    category: reliability
+    target:
+      metric: "service availability SLO"
+      value:
+        target: "~99% during business hours"
+        window: "Mon–Fri 08:00–18:00 local (single workspace, A-5)"
+        off_hours: "served best-effort, NOT under SLO"
+        dependency_bound: "cannot exceed Kiro/Bedrock inference AND aws-knowledge-mcp-server availability (C-3); external-dependency outages are reported as graceful FR-17 in-thread failures and EXCLUDED from the SLO error budget"
+      tunable: true
+    measure: "Successful (resolved) fraction of accepted questions during the SLO window, excluding external-dependency-outage failures."
+    verification: "Availability dashboard over the SLO window (NFR-20); error-budget report classifying failures by cause (own vs dependency)."
+    source: { requirements: [], assumptions: [A-7], constraints: [C-3], decision: "Q3=a", resolves: [A-7], origin: "requirements-level: the availability target carries forward NFR-9 from requirements-analysis; its dependency-bound originates from contributor C-3 (cited via constraints: [C-3])" }
+    owner_component: CMP-002
+    status: finalized
+
+  # ============================ CONCURRENCY ================================
+  - id: NFR-10
+    name: "Concurrency without head-of-line blocking"
+    category: scalability
+    target:
+      metric: "concurrent in-flight questions"
+      value:
+        pattern: "horizontally-scalable worker role draining the internal C-1 durable queue (API-INT-009); intake role (NFR-1) stays decoupled and always-on"
+        starting_target: ">= 10 concurrent in-flight questions with no head-of-line blocking (one slow question must not stall others)"
+        tunable: true
+      note: "The PATTERN and TARGET are fixed here. The concrete worker instance/concurrency COUNT and the runtime mechanism (process pool / autoscaling consumers / function concurrency) are an infrastructure-design decision."
+    measure: "Under N simultaneous questions where one is artificially slow, the others complete within their own NFR-2 budget independently."
+    verification: "Concurrency test: inject one 25s question among many fast ones; assert fast ones are unaffected (no HOL blocking); throughput >= starting_target."
+    source: { requirements: [], constraints: [C-1], stories: [S-24], authority: "R-5 (architectural authority; contributor G-5) — concurrency was not a human question" }
+    owner_component: CMP-002
+    status: policy-fixed-value-handed-off
+    deferred_to: infrastructure-design
+
+  # ============================ INPUT SIZE =================================
+  - id: NFR-14
+    name: "Max input size & oversize behaviour"
+    category: reliability
+    target:
+      metric: "context-window budget + behaviour (Q5=c hybrid)"
+      value:
+        input_budget_default: "12,000 tokens reserved for input (current question + assembled thread context); conservative default leaving headroom for output"
+        budget_policy: "input budget = max(model_context_window - reserved_output, conservative_default); exact token number finalised vs the chosen model in infrastructure-design"
+        behaviour:
+          normal_overflow: "TRIM-WITH-NOTICE — drop oldest thread context, keep most-recent context + current question, post an in-thread notice that earlier context was trimmed (never silent — FR-21/BR-007)"
+          question_alone_overflows: "REJECT-AND-ASK — if the current question alone still exceeds the budget after trimming, do not process; reply 'input too large' and resolve `failed` (BR-007 -> W3)"
+      tunable: true
+    measure: "ConversationContext.within-size-budget flag; trimmed-with-notice count vs rejected count."
+    verification: "Test: moderate overflow trims + posts notice (no silent truncation); bare-question overflow rejects with guidance and fails the job."
+    source: { requirements: [FR-21], assumptions: [A-9], constraints: [C-2], rules: [BR-007], decision: "Q5=c", resolves: [A-9] }
+    owner_component: CMP-002
+    status: policy-fixed-value-handed-off
+    deferred_to: infrastructure-design   # exact token number only; policy shape fixed here
+
+  # ============================ IN-FLIGHT RECOVERY =========================
+  - id: NFR-19
+    name: "In-flight recovery bounds"
+    category: reliability
+    target:
+      metric: "retry attempts + staleness detection (CS-2)"
+      value:
+        max_attempt: 3            # attempt-count >= max -> failed (BR-022)
+        staleness_bound: "90s — a job in `in-progress` whose last-transition-at is older than 90s is considered lost and eligible for recovery"
+        invariant: "staleness_bound (90s) > NFR-17 per-request budget (30s) + heartbeat margin, so a LIVE job is never reclaimed; single-winner lease + idempotent post (BR-027) prevents duplicate answers"
+      tunable: true
+    measure: "attempt-count distribution; count of recovered vs abandoned-to-failed jobs."
+    verification: "Kill a worker mid-job; assert recovery re-enters in-progress (attempt++), at-most-once-COMPLETED holds (no duplicate answer), and attempts exhaust to `failed` with FR-17."
+    source: { requirements: [FR-19], constraints: [CS-2, CS-3], rules: [BR-021, BR-022, BR-027] }
+    owner_component: "CMP-006, CMP-002"
+    status: finalized
+
+  # ============================ OBSERVABILITY (NFR VERIFICATION) ===========
+  - id: NFR-20
+    name: "Observability signals (NFR verification instruments)"
+    category: operability
+    target:
+      metric: "required signals"
+      value:
+        logs: "structured JSON, one correlation-id per job (== ProcessingJob.job-id), no secrets/PII (NFR-6/BR-026)"
+        metrics:
+          - "ack latency histogram (verifies NFR-1)"
+          - "full-answer latency histogram (verifies NFR-2)"
+          - "failure-by-cause counter {timeout|budget|cap|oversize|dependency|safety-refuse|retries-exhausted} (verifies NFR-7/12/14/17)"
+          - "per-period usage counter & degrade count (verifies NFR-8/NFR-13)"
+          - "adoption counters: distinct developers, questions handled (FR-18)"
+          - "circuit-breaker state gauge per dependency (verifies NFR-16)"
+          - "in-flight concurrency gauge + recovery/abandon counters (verifies NFR-10/NFR-19)"
+      note: "These are the INSTRUMENTS by which every other NFR is verified in production; concrete backend (metrics/log sink) chosen in infrastructure-design."
+    measure: "All listed signals emitted and queryable, keyed/correlatable by correlation-id."
+    verification: "Process a question end-to-end; confirm every listed signal is present, correlatable, and free of secrets/PII."
+    source: { requirements: [FR-18], rules: [BR-026], data_attrs: ["ENT-001.correlation-id"] }
+    owner_component: "all (cross-cutting); CMP-007 owns durable counters"
+    status: policy-fixed-value-handed-off
+    deferred_to: infrastructure-design   # signal SINK only; required signals fixed here
+
+# ===========================================================================
+# DEFERRED-PLACEHOLDER RESOLUTION LEDGER (requirements-stage "set in nfr-design")
+# ===========================================================================
+id_sequence_note:
+  unused_ids: [NFR-18]
+  reason: "NFR-18 was intentionally not used. Its adoption-metric concern (FR-18) was folded into NFR-20 (observability adoption counters). The new-row block is therefore NFR-11..17, 19, 20, 21 — a deliberate gap at NFR-18, NOT a dropped or lost NFR. Published IDs are preserved unchanged."
+
+placeholder_resolution:
+  A-3: { resolved_by: [NFR-2, NFR-11], how: "p95<=30s confirmed + 15s heartbeat (Q1=a)" }
+  A-6: { resolved_by: [NFR-21, NFR-4], how: "best-effort heuristic posture + hard-refuse-and-re-ask, no override (Q4=b)" }
+  A-7: { resolved_by: [NFR-8, NFR-12, NFR-13], how: "per-request cap + per-period soft budget; CMP-007 owns decision (Q2=b)" }
+  A-9: { resolved_by: [NFR-14], how: "hybrid trim/reject; token budget shape fixed, exact number handed to infra (Q5=c)" }
+  NFR-8_thresholds: { resolved_by: [NFR-12, NFR-13], how: "concrete starting numbers set, operator-tunable" }
+  NFR-9_target: { resolved_by: [NFR-9], how: "business-hours ~99%, dependency-bounded (Q3=a)" }
+  NFR-10_target: { resolved_by: [NFR-10], how: "pattern + starting target fixed; count handed to infra (R-5 architectural authority — not a human decision)" }
+
+# Handed to infrastructure-design (POLICY fixed here, one concrete value finalised there):
+infrastructure_design_handoff:
+  - { item: "exact input-token budget", policy_ref: NFR-14, fixed_here: "hybrid trim/reject behaviour + conservative 12k default" }
+  - { item: "worker concurrency/instance count + scaling mechanism", policy_ref: NFR-10, fixed_here: "horizontally-scalable queue-draining pattern + >=10 starting target" }
+  - { item: "metrics/log sink + dashboards", policy_ref: NFR-20, fixed_here: "the required signal set + correlation-id keying" }
+  - { item: "secret-manager choice + per-integration IAM scopes", policy_ref: NFR-5, fixed_here: "secret-manager-stored, least-privilege requirement" }
+  - { item: "concrete queue + datastore + inference backend (Kiro/Bedrock)", policy_ref: [NFR-9, NFR-16], fixed_here: "dependency-bounded SLO + per-dependency breaker policy" }

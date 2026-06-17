@@ -1,0 +1,98 @@
+{
+  "intent": "slack-devops-agent",
+  "composed": "2026-06-17T09:25:44+08:00",
+  "maxReviewIterations": 3,
+  "stages": [
+    {
+      "stage": "requirements-analysis",
+      "phase": "inception",
+      "owner": "aidlc-product-manager-agent",
+      "contributors": ["aidlc-systems-architect-agent"],
+      "reviewer": "aidlc-product-lead-agent",
+      "autonomy": "supervised",
+      "rationale": "Greenfield integration service with real external dependencies (Slack, MCP, Kiro inference) needs structured requirements including the inference-provider abstraction and NFRs."
+    },
+    {
+      "stage": "story-generation",
+      "phase": "inception",
+      "owner": "aidlc-product-manager-agent",
+      "contributors": ["aidlc-systems-architect-agent"],
+      "reviewer": "aidlc-product-lead-agent",
+      "autonomy": "supervised",
+      "rationale": "Decompose requirements into implementable stories for the bot's question-answer flows."
+    },
+    {
+      "stage": "domain-design",
+      "phase": "inception",
+      "owner": "aidlc-app-architect-agent",
+      "contributors": ["aidlc-systems-architect-agent"],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Identify logical building blocks: Slack adapter, agent core, inference provider, MCP tool client."
+    },
+    {
+      "stage": "units-generation",
+      "phase": "inception",
+      "owner": "aidlc-app-architect-agent",
+      "contributors": ["aidlc-systems-architect-agent"],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Group building blocks into deployable units. contract-design will be added back here if the design splits into multiple units."
+    },
+    {
+      "stage": "functional-design",
+      "phase": "construction",
+      "owner": "aidlc-systems-architect-agent",
+      "contributors": ["aidlc-product-manager-agent"],
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Detailed agent loop logic, Slack message/interaction design, MCP tool orchestration, inference-provider interface."
+    },
+    {
+      "stage": "nfr-design",
+      "phase": "construction",
+      "owner": "aidlc-systems-architect-agent",
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Quality targets (latency, cost, rate limits), tech stack, and patterns for the agent service."
+    },
+    {
+      "stage": "infrastructure-design",
+      "phase": "construction",
+      "owner": "aidlc-systems-architect-agent",
+      "reviewer": "aidlc-architecture-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Map components to runtime/infra and resolve how Kiro inference is invoked at deployment."
+    },
+    {
+      "stage": "code-generation",
+      "phase": "construction",
+      "owner": "aidlc-sw-dev-engineer-agent",
+      "contributors": ["aidlc-systems-architect-agent"],
+      "reviewer": "aidlc-code-reviewer-agent",
+      "autonomy": "supervised",
+      "rationale": "Generate the production bot service with write-test-verify cycles."
+    },
+    {
+      "stage": "reverse-engineering",
+      "phase": "inception",
+      "owner": "aidlc-systems-architect-agent",
+      "skipped": true,
+      "skip-reason": "Fully greenfield — no existing codebase or reference implementation to study (human answered Q1: No)."
+    },
+    {
+      "stage": "wireframe-design",
+      "phase": "inception",
+      "owner": "aidlc-ux-designer-agent",
+      "skipped": true,
+      "skip-reason": "Slack is the interface; message/interaction formatting folds into functional-design."
+    },
+    {
+      "stage": "contract-design",
+      "phase": "inception",
+      "owner": "aidlc-app-architect-agent",
+      "skipped": true,
+      "skip-reason": "Expected single deployable unit. Will be added back at units-generation if the design splits into multiple units."
+    }
+  ]
+}

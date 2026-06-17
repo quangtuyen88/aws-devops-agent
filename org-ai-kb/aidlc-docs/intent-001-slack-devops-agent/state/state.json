@@ -1,0 +1,335 @@
+{
+ "intent": "slack-devops-agent",
+ "created": "2026-06-17T09:18:38+08:00",
+ "updated": "2026-06-17T15:52:35+08:00",
+ "stages": [
+  {
+   "stage": "requirements-analysis",
+   "status": "complete",
+   "owner": "aidlc-product-manager-agent",
+   "contributors": [
+    "aidlc-systems-architect-agent"
+   ],
+   "contributions": [
+    {
+     "contributor": "aidlc-systems-architect-agent",
+     "contributed": true
+    }
+   ],
+   "reviewer": "aidlc-product-lead-agent",
+   "reviewIterations": 0,
+   "outputs": [
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/inception/requirements-analysis/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/inception/requirements-analysis/"
+    },
+    {
+     "name": "requirements.md",
+     "locationRelativeToIntentRoot": "/stages/inception/requirements-analysis/"
+    },
+    {
+     "name": "aidlc-systems-architect-agent-contribution.md",
+     "locationRelativeToIntentRoot": "/stages/inception/requirements-analysis/"
+    },
+    {
+     "name": "aidlc-product-lead-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/inception/requirements-analysis/"
+    }
+   ]
+  },
+  {
+   "stage": "story-generation",
+   "status": "complete",
+   "owner": "aidlc-product-manager-agent",
+   "contributors": [
+    "aidlc-systems-architect-agent"
+   ],
+   "contributions": [
+    {
+     "contributor": "aidlc-systems-architect-agent",
+     "contributed": true
+    }
+   ],
+   "reviewer": "aidlc-product-lead-agent",
+   "reviewIterations": 0,
+   "outputs": [
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    },
+    {
+     "name": "personas.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    },
+    {
+     "name": "stories.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    },
+    {
+     "name": "aidlc-systems-architect-agent-contribution.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    },
+    {
+     "name": "aidlc-product-lead-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/inception/story-generation/"
+    }
+   ]
+  },
+  {
+   "stage": "domain-design",
+   "status": "complete",
+   "owner": "aidlc-app-architect-agent",
+   "contributors": [
+    "aidlc-systems-architect-agent"
+   ],
+   "contributions": [
+    {
+     "contributor": "aidlc-systems-architect-agent",
+     "contributed": true
+    }
+   ],
+   "reviewer": "aidlc-architecture-reviewer-agent",
+   "reviewIterations": 0,
+   "outputs": [
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    },
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    },
+    {
+     "name": "components.yaml",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    },
+    {
+     "name": "components.md",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    },
+    {
+     "name": "aidlc-systems-architect-agent-contribution.md",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    },
+    {
+     "name": "aidlc-architecture-reviewer-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/inception/domain-design/"
+    }
+   ]
+  },
+  {
+   "stage": "units-generation",
+   "status": "complete",
+   "owner": "aidlc-app-architect-agent",
+   "contributors": [
+    "aidlc-systems-architect-agent"
+   ],
+   "contributions": [
+    {
+     "contributor": "aidlc-systems-architect-agent",
+     "contributed": true
+    }
+   ],
+   "reviewer": "aidlc-architecture-reviewer-agent",
+   "reviewIterations": 0,
+   "outputs": [
+    {
+     "name": "aidlc-systems-architect-agent-contribution.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "components.yaml",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "units.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "unit-dependencies.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "unit-story-map.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    },
+    {
+     "name": "aidlc-architecture-reviewer-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/inception/units-generation/"
+    }
+   ]
+  },
+  {
+   "stage": "functional-design",
+   "unit": "UNIT-001",
+   "status": "complete",
+   "owner": "aidlc-systems-architect-agent",
+   "contributors": [
+    "aidlc-product-manager-agent"
+   ],
+   "contributions": [
+    {
+     "contributor": "aidlc-product-manager-agent",
+     "contributed": true
+    }
+   ],
+   "reviewer": "aidlc-architecture-reviewer-agent",
+   "reviewIterations": 1,
+   "outputs": [
+    {
+     "name": "aidlc-product-manager-agent-contribution.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "entities.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "rules.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "api-specification.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "functional-spec.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "components.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "unit.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "unit-story-map.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    },
+    {
+     "name": "aidlc-architecture-reviewer-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/functional-design/"
+    }
+   ]
+  },
+  {
+   "stage": "nfr-design",
+   "unit": "UNIT-001",
+   "status": "complete",
+   "owner": "aidlc-systems-architect-agent",
+   "reviewer": "aidlc-architecture-reviewer-agent",
+   "reviewIterations": 1,
+   "outputs": [
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/nfr-design/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/nfr-design/"
+    },
+    {
+     "name": "nfr.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/nfr-design/"
+    },
+    {
+     "name": "nfr-spec.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/nfr-design/"
+    }
+   ]
+  },
+  {
+   "stage": "infrastructure-design",
+   "unit": "UNIT-001",
+   "status": "complete",
+   "owner": "aidlc-systems-architect-agent",
+   "reviewer": "aidlc-architecture-reviewer-agent",
+   "reviewIterations": 1,
+   "outputs": [
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    },
+    {
+     "name": "infrastructure-specification.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    },
+    {
+     "name": "components.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    },
+    {
+     "name": "unit.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    },
+    {
+     "name": "aidlc-architecture-reviewer-agent-review.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/infrastructure-design/"
+    }
+   ]
+  },
+  {
+   "stage": "code-generation",
+   "unit": "UNIT-001",
+   "status": "complete",
+   "owner": "aidlc-sw-dev-engineer-agent",
+   "contributors": [
+    "aidlc-systems-architect-agent"
+   ],
+   "reviewer": "aidlc-code-reviewer-agent",
+   "reviewIterations": 0,
+   "outputs": [
+    {
+     "name": "questions.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/code-generation/"
+    },
+    {
+     "name": "plan.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/code-generation/"
+    },
+    {
+     "name": "implementation-map.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/code-generation/"
+    },
+    {
+     "name": "components.yaml",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/code-generation/"
+    },
+    {
+     "name": "unit.md",
+     "locationRelativeToIntentRoot": "/stages/construction/UNIT-001/code-generation/"
+    }
+   ]
+  }
+ ]
+}

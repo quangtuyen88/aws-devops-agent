@@ -1,0 +1,49 @@
+# Example variable values — copy to terraform.tfvars and fill in per account/environment.
+# Secrets are NEVER set here; they are stored in AWS Secrets Manager and injected at runtime.
+
+aws_region  = "us-east-1"
+name_prefix = "slack-devops-agent"
+environment = "dev"
+
+vpc_cidr = "10.40.0.0/16"
+az_count = 2
+
+# Built UNIT-001 Lambda package (intake + worker + reaper share one artifact).
+lambda_artifact_s3_bucket = "my-artifacts-bucket"
+lambda_artifact_s3_key    = "slack-devops-agent/unit-001.zip"
+
+# Unmodified upstream kiro-gateway image (AGPL boundary — separate artifact, never vendored).
+gateway_image           = "123456789012.dkr.ecr.us-east-1.amazonaws.com/kiro-gateway:1.0.0"
+gateway_desired_count   = 2
+gateway_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REPLACE-ME"
+
+inference_backend = "kiro"
+mcp_base_url      = "https://knowledge-mcp.global.api.aws"
+
+# Scope Bedrock (alternate backend) to specific model ARNs — no wildcards (least-privilege).
+bedrock_model_arns = [
+  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
+]
+
+# --- Existing-network / existing-ALB (destroy-safe) mode ---
+# When use_existing_network = true the stack consumes the VPC/subnets/SG below via DATA
+# SOURCES only (by-ID) and never manages them, so `terraform destroy` can never delete the
+# pre-existing network. Leave false (default) to create and own the VPC/NAT/ALB.
+use_existing_network        = false
+existing_vpc_id             = "" # e.g. "vpc-0abc123..."
+existing_private_subnet_ids = []  # e.g. ["subnet-0aaa...", "subnet-0bbb..."]
+existing_security_group_ids = []  # e.g. ["sg-0abc123..."]
+existing_nat_gateway        = false # true to reuse the existing VPC's NAT (skip creating one)
+
+# Existing-ALB: add a listener rule to a borrowed ALB instead of creating one.
+existing_alb              = false
+existing_alb_listener_arn = "" # e.g. "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/my-alb/abc/def"
+
+# --- Per-endpoint interface VPC endpoint toggles (DynamoDB/S3 are free gateway endpoints) ---
+create_sqs_endpoint            = true
+create_secretsmanager_endpoint = true
+create_logs_endpoint           = true
+create_ecr_api_endpoint        = true
+create_ecr_dkr_endpoint        = true
+# Bedrock endpoint default OFF — failover egresses via NAT unless compliance requires PrivateLink.
+create_bedrock_endpoint = false

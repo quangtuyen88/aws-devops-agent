@@ -1,0 +1,546 @@
+# Entities — Functional Design (source of truth)
+# Intent: Slack DevOps Agent Bot (intent-001-slack-devops-agent)
+# Stage: functional-design (construction) · Unit: UNIT-001
+# Owner: aidlc-systems-architect-agent
+#
+# Copied forward from units-generation/components.yaml (ENT-001..ENT-014) and expanded
+# IN PLACE with full attribute schemas, constraints, and relationships. Every entity ID,
+# entity name, and attribute name from the blueprint is preserved verbatim. New attributes
+# added during this stage are marked `# +functional-design`. Refinements that expand a
+# blueprint value (Q2 status enum, Q4 feedback cardinality) are called out as REFINEMENT.
+#
+# Durability legend (from blueprint descriptions):
+#   transient  — per-request, never persisted
+#   durable    — survives process restart; part of the CS-1 shared-state boundary
+#
+# Technology-agnostic: logical types only. No SQL, no framework, no storage engine.
+# Concrete numeric bounds (sizes, limits, periods) are named here and DEFERRED to
+# nfr-design (A-7/A-9) — functional-design fixes shape, not numbers.
+
+# =============================================================================
+# CMP-001 — Slack Interaction Adapter (transient boundary entities)
+# =============================================================================
+
+- id: ENT-001
+  name: "InboundMention"
+  component-id: CMP-001
+  component-name: "Slack Interaction Adapter"
+  description: "A parsed, accepted mention of the bot — the captured question and the Slack coordinates needed to answer it. Transient (per-request); not durable."
+  durability: "transient"
+  source:
+    requirements: [FR-1, FR-20, FR-21, NFR-6]
+    stories: [S-1, S-21]
+  attributes:
+    - name: "correlation-id"
+      type: "uuid"
+      required: true
+      unique: true
+      constraints: "Canonical end-to-end request id; equals ProcessingJob.job-id (ENT-008.job-id) once registered. Stamped at intake, propagated across the C-1 async boundary for tracing and NFR-6 log hygiene (DA-1)."
+    - name: "channel-id"
+      type: "string"
+      required: true
+      constraints: "Slack channel identifier of the originating message; half of the de-dup identity (Q3, see ENT-008.slack-event-identity)."
+    - name: "thread-ts"
+      type: "string"
+      required: false
+      constraints: "Slack thread timestamp; null when the mention is a top-level channel message (the message then starts its own thread). Used for context fetch (CMP-001) and to post replies in-thread."
+    - name: "message-ts"
+      type: "string"
+      required: true
+      constraints: "Slack timestamp of the triggering message; unique within a channel; the other half of the de-dup identity (Q3)."
+    - name: "author-id"
+      type: "string"
+      required: true
+      constraints: "Slack user/app id of the message author; feeds the distinct-developer adoption metric (ENT-009) and the bot/self ignore rule (BR-002)."
+    - name: "is-bot-author"
+      type: "boolean"
+      required: true
+      default: "false"
+      constraints: "True when the author is the bot itself or another bot/app; drives the FR-20 ignore rule (BR-002)."
+    - name: "raw-text"
+      type: "string"
+      required: true
+      constraints: "Raw message text including the @mention token; parsed into the captured question. Never logged in full where it may contain pasted secrets/PII (NFR-6)."
+    - name: "slack-retry-num"
+      type: "integer"
+      required: false
+      min: 0
+      constraints: "Slack's X-Slack-Retry-Num for this delivery; >0 indicates an at-least-once redelivery. Does NOT by itself decide de-dup — identity does (CS-3/BR-010)."
+  constraints:
+    - "Accepted only after passing the bot/self filter (BR-002) and the channel allowlist (BR-001)."
+    - "correlation-id is assigned at intake and is immutable for the life of the request."
+  relationships:
+    - entity-id: ENT-008
+      entity: "ProcessingJob"
+      cardinality: "1:1"
+      direction: "Each accepted InboundMention is registered as exactly one ProcessingJob; correlation-id == job-id."
+
+- id: ENT-002
+  name: "ReactionEvent"
+  component-id: CMP-001
+  component-name: "Slack Interaction Adapter"
+  description: "A captured 👍/👎 reaction add or removal on a posted answer at the Slack boundary, before it is recorded as a durable feedback signal. Transient."
+  durability: "transient"
+  source:
+    requirements: [FR-16]
+    stories: [S-25]
+  attributes:
+    - name: "answer-message-ts"
+      type: "string"
+      required: true
+      constraints: "Slack timestamp of the answer message the reaction was placed on; resolves to the Answer.correlation-id when forwarded (BR-018)."
+    - name: "reactor-id"
+      type: "string"
+      required: true
+      constraints: "Slack user id of the developer who added/removed the reaction; part of the (answer, reactor) aggregation key (Q4)."
+    - name: "reaction-kind"
+      type: "enum"
+      required: true
+      values: [positive, negative]
+      constraints: "Normalised from the Slack emoji (👍 → positive, 👎 → negative); other emojis are ignored (BR-018)."
+    - name: "event-action"      # +functional-design (Q4 support)
+      type: "enum"
+      required: true
+      values: [added, removed]
+      constraints: "Whether the reaction was added or removed; lets the append-only FeedbackSignal log (ENT-010, Q4) capture a changed/withdrawn signal."
+  constraints:
+    - "Only reactions on messages the bot itself posted as answers are captured; reactions on other messages are ignored (BR-018)."
+    - "NOTE (M-3, PM contribution): FR-16's '(or equivalent control)' is intentionally narrowed for v1 to 👍/👎 emoji reactions only (no buttons/other controls). Reactions fully satisfy FR-16; the narrowing is a conscious v1 scoping decision, not an oversight."
+
+# =============================================================================
+# CMP-002 — Agent Orchestrator (transient working entities)
+# =============================================================================
+
+- id: ENT-003
+  name: "ConversationContext"
+  component-id: CMP-002
+  component-name: "Agent Orchestrator"
+  description: "Thread-scoped working memory for the agent loop, reconstructed from fetched Slack replies at request time. Ephemeral — never persisted to a durable cross-session store (A-8, OOS-4, CS-6)."
+  durability: "transient"
+  source:
+    requirements: [FR-4, FR-21]
+    stories: [S-13, S-22]
+  attributes:
+    - name: "thread-ts"
+      type: "string"
+      required: true
+      constraints: "Identifies the thread whose replies were fetched; scopes the context (no cross-thread carryover — BR-005)."
+    - name: "ordered-messages"
+      type: "list<object>"
+      required: true
+      constraints: "Prior thread messages in chronological order, fetched on demand via CMP-001 (fetch-not-store, CS-6). Discarded when the request ends."
+    - name: "assembled-prompt-input"
+      type: "string"
+      required: true
+      constraints: "The concatenated question + ordered context prepared for the safety gate and inference; this is the exact payload BR-007 (size bound) and BR-012 (safety gate) evaluate."
+    - name: "within-size-budget"
+      type: "boolean"
+      required: true
+      constraints: "True when assembled-prompt-input fits the configured max input size (FR-21/A-9; concrete limit set in nfr-design). False routes to the oversize path (BR-007)."
+  constraints:
+    - "MUST NOT be written to any durable store (A-8, OOS-4, CS-6); it lives only for the active request."
+
+# =============================================================================
+# CMP-002 — Answer (transient output entity)
+# =============================================================================
+
+- id: ENT-004
+  name: "Answer"
+  component-id: CMP-002
+  component-name: "Agent Orchestrator"
+  description: "The composed response to a question: recommendation plus rationale, trade-offs, optional alternative, and the citations gathered from grounding. Transient (produced per request, posted via CMP-001)."
+  durability: "transient"
+  source:
+    requirements: [FR-7, FR-8, FR-9, FR-10, FR-11, FR-12, FR-13, FR-14]
+    stories: [S-5, S-6, S-7, S-8, S-11, S-12]
+  attributes:
+    - name: "correlation-id"
+      type: "uuid"
+      required: true
+      constraints: "Same canonical request id as the originating InboundMention / ProcessingJob.job-id; makes FeedbackSignal.answer-ref unambiguous and threads the answer back to its request (DA-1)."
+    - name: "answer-type"       # +functional-design (F-2: makes BR-015 branch on a modelled field)
+      type: "enum"
+      required: true
+      values: [architecture-review, solution-design, cost, troubleshooting, factual]
+      default: "factual"
+      constraints: "The classified intent of the question, assigned by the agent worker BEFORE answer composition (W2). BR-015 keys on this field: architecture-review and solution-design REQUIRE trade-offs (+ alternative where meaningful); cost/troubleshooting/factual require only recommendation + rationale. Classification is best-effort (FR-9/FR-10 detection is heuristic); when uncertain the worker MUST fall back to `factual` (no under-specified structured answer is forced). Modelling this field removes the unverifiable branch the PM flagged in F-2."
+    - name: "recommendation"
+      type: "string"
+      required: true
+      constraints: "The direct recommendation (FR-8a). Mandatory in every answer."
+    - name: "rationale"
+      type: "string"
+      required: true
+      constraints: "The reasoning behind the recommendation (FR-8b)."
+    - name: "trade-offs"
+      type: "string"
+      required: false
+      constraints: "Relevant trade-offs (FR-8c); required for architecture-review / solution-design answers (BR-015), may be empty for simple factual answers."
+    - name: "alternatives"
+      type: "string"
+      required: false
+      constraints: "At least one alternative where applicable (FR-8d); may be omitted when an alternative is not meaningful (BR-015)."
+    - name: "citations"
+      type: "list<reference:ENT-006>"
+      required: false
+      constraints: "GroundingSource references used to produce the answer. Required and non-empty when is-grounded=true; MUST be empty when is-grounded=false (BR-016). Never fabricated (A-2/BR-009)."
+    - name: "is-grounded"
+      type: "boolean"
+      required: true
+      default: "false"
+      constraints: "True only when at least one GroundingSource was incorporated. False ⇒ answer is explicitly marked ungrounded in the rendered text (A-2/BR-009/BR-016)."
+    - name: "code-snippets"
+      type: "list<object>"
+      required: false
+      constraints: "IaC/code blocks (Terraform / AWS CDK / AWS SAM) where the developer requested buildable output (FR-13). Advice only — never executed or deployed (OOS-3/BR-017)."
+  constraints:
+    - "An answer with is-grounded=true MUST carry ≥1 citation; an answer with is-grounded=false MUST carry zero citations and an explicit ungrounded marker (BR-016)."
+  relationships:
+    - entity-id: ENT-006
+      entity: "GroundingSource"
+      cardinality: "1:N"
+      direction: "An Answer cites zero-or-more GroundingSources (one-or-more when grounded)."
+    - entity-id: ENT-010
+      entity: "FeedbackSignal"
+      cardinality: "1:N"
+      direction: "An Answer (by correlation-id) accrues zero-or-more FeedbackSignals over time."
+
+# =============================================================================
+# CMP-003 — Inference Provider (transient exchange entity)
+# =============================================================================
+
+- id: ENT-005
+  name: "InferenceExchange"
+  component-id: CMP-003
+  component-name: "Inference Provider"
+  description: "One request/response round-trip with the inference backend: the prompt sent and the model output plus usage metadata. Transient."
+  durability: "transient"
+  source:
+    requirements: [FR-5, NFR-8]
+    stories: [S-3]
+  attributes:
+    - name: "prompt-input"
+      type: "string"
+      required: true
+      constraints: "The backend-agnostic prompt payload submitted; only reaches here AFTER the safety gate allows it (CS-4/BR-012)."
+    - name: "model-output"
+      type: "string"
+      required: false
+      constraints: "Normalised model response; null on a typed inference failure that routes to the S-19 failure path (BR-013)."
+    - name: "token-usage"
+      type: "integer"
+      required: false
+      min: 0
+      constraints: "Tokens/units consumed, reported up so CMP-007 can increment the UsageCounter for the NFR-8 guardrail (BR-019)."
+    - name: "backend-id"
+      type: "string"
+      required: true
+      constraints: "Identifier of the concrete backend that served this exchange (e.g. kiro, bedrock); the swappable A-1 detail, selected in infrastructure-design. Agent-core logic is invariant to its value."
+  constraints:
+    - "Exposed only through the CMP-003 stable interface (API-INT-001); the orchestrator never sees backend specifics beyond backend-id."
+
+# =============================================================================
+# CMP-004 — AWS Knowledge MCP Client (transient grounding entity)
+# =============================================================================
+
+- id: ENT-006
+  name: "GroundingSource"
+  component-id: CMP-004
+  component-name: "AWS Knowledge MCP Client"
+  description: "A citable AWS documentation source returned by an MCP tool call, used to ground and cite an answer. Transient (per request)."
+  durability: "transient"
+  source:
+    requirements: [FR-6, FR-7]
+    stories: [S-4, S-5]
+  attributes:
+    - name: "title"
+      type: "string"
+      required: true
+      constraints: "Human-readable title of the AWS doc source; rendered in the citation."
+    - name: "url"
+      type: "string"
+      required: true
+      constraints: "Link to the specific AWS documentation source; rendered as a clickable Slack link (S-5/S-6)."
+    - name: "snippet"
+      type: "string"
+      required: false
+      constraints: "Relevant excerpt returned by the MCP tool, incorporated into the grounded answer."
+    - name: "tool-name"
+      type: "string"
+      required: true
+      constraints: "Which aws-knowledge-mcp-server tool produced it (e.g. documentation-search, regional-availability); for traceability."
+  constraints:
+    - "Never fabricated. Absence of any GroundingSource for a query means the answer is marked ungrounded, not invented (A-2/BR-009)."
+
+# =============================================================================
+# CMP-005 — Input Safety Scanner (transient verdict entity)
+# =============================================================================
+
+- id: ENT-007
+  name: "SafetyVerdict"
+  component-id: CMP-005
+  component-name: "Input Safety Scanner"
+  description: "The outcome of scanning one input: whether secrets were detected, what was matched (redacted), and the recommended action. Transient."
+  durability: "transient"
+  source:
+    requirements: [FR-15, NFR-4, NFR-6]
+    stories: [S-16]
+  attributes:
+    - name: "flagged"
+      type: "boolean"
+      required: true
+      constraints: "True when likely secrets/credentials/keys/tokens were detected (best-effort/heuristic per A-6)."
+    - name: "findings"
+      type: "list<object>"
+      required: false
+      constraints: "Redacted match descriptors (kind + location) — NEVER raw secret values (NFR-6). Empty when flagged=false."
+    - name: "recommended-action"
+      type: "enum"
+      required: true
+      values: [allow, warn, refuse]
+      constraints: "Drives the pre-send gate (CS-4/BR-012): allow proceeds; warn proceeds with a user notice; refuse blocks forwarding to inference/MCP. Exact warn-vs-refuse policy mapping set in nfr-design (A-6)."
+  constraints:
+    - "Produced BEFORE any inference (ENT-005) or MCP (ENT-006) call for the request (CS-4 ordering — BR-011/BR-012)."
+
+# =============================================================================
+# CMP-006 — Job Coordinator (DURABLE — CS-1 shared-state boundary)
+# =============================================================================
+
+- id: ENT-008
+  name: "ProcessingJob"
+  component-id: CMP-006
+  component-name: "Job Coordinator"
+  description: "A unit of async work for one originating Slack mention, with the de-dup identity and the state machine that guarantees at-most-once-completed processing and in-flight recovery. Durable (part of the CS-1 shared-state boundary)."
+  durability: "durable"
+  source:
+    requirements: [FR-19]
+    stories: [S-19, S-20, S-24]
+  attributes:
+    - name: "job-id"
+      type: "uuid"
+      required: true
+      unique: true
+      constraints: "Primary identity of the job; equals the originating InboundMention.correlation-id and the Answer.correlation-id (DA-1)."
+    - name: "slack-event-identity"
+      type: "composite(channel-id, message-ts)"   # REFINEMENT (Q3=a): composed of channel-id + message-ts
+      required: true
+      unique: true
+      constraints: "De-dup key (CS-3). Q3=a: composed of the originating mention's channel-id + message-ts. Idempotent across both Slack at-least-once redelivery (slack-retry-num) and our own intake→worker re-enqueue. At most one job per (channel-id, message-ts)."
+    - name: "originating-message-ref"
+      type: "object"
+      required: true
+      constraints: "The Slack coordinates (channel-id, thread-ts, message-ts) needed to post the ack, answer, or failure back into the originating thread (FR-14/FR-17)."
+    - name: "status"
+      type: "enum"
+      required: true
+      values: [seen, in-progress, resolved, failed]   # REFINEMENT (Q2=b): added `failed` terminal alongside `resolved`
+      default: "seen"
+      constraints: "Lifecycle state (see functional-spec.md state machine). REFINEMENT vs blueprint (Q2=b): blueprint enum was `seen | in-progress | resolved`; expanded IN PLACE with a distinct `failed` terminal (no rename, no new entity). `resolved` = answer posted (success); `failed` = unrecoverable error / budget-deny / oversize / exhausted retries, failure message posted."
+    - name: "attempt-count"
+      type: "integer"
+      required: true
+      min: 0
+      default: "0"
+      constraints: "Incremented each time the job (re)enters in-progress (BR-021). Compared against the max-attempt limit (named parameter, value set in nfr-design) to decide retry vs abandon-to-failed (CS-2/BR-022)."
+    - name: "last-transition-at"
+      type: "timestamp"
+      required: true
+      constraints: "Time of the most recent state transition; used by in-flight recovery to detect acked-but-incomplete jobs whose worker was lost (CS-2/BR-021)."
+  constraints:
+    - "At most ONE ProcessingJob per slack-event-identity (CS-3 at-most-once-completed) — re-delivery or re-enqueue of the same identity attaches to the existing job, never creates a second."
+    - "`resolved` and `failed` are terminal: no transition leaves them (Q2=b)."
+    - "A job in `in-progress` whose worker is lost is re-eligible for processing; it re-enters `in-progress` with attempt-count incremented rather than being treated as a duplicate (CS-2/CS-3)."
+    - "Entry into `in-progress` MUST be single-winner (lease / compare-and-set on job-id + attempt-count/last-transition-at) and answer posting MUST be idempotent per job-id, so a slow-but-alive worker and a recovery worker never both post for one job (BR-027). Concrete mechanism deferred to infrastructure-design."
+  relationships:
+    - entity-id: ENT-001
+      entity: "InboundMention"
+      cardinality: "1:1"
+      direction: "One ProcessingJob is created from one accepted InboundMention (job-id == correlation-id)."
+
+# =============================================================================
+# CMP-007 — Operational Data Service (DURABLE — CS-1 shared-state boundary)
+# =============================================================================
+
+- id: ENT-009
+  name: "AdoptionMetric"
+  component-id: CMP-007
+  component-name: "Operational Data Service"
+  description: "Aggregate adoption counters sufficient to report distinct developers served and questions handled per period. Durable; append/aggregate. Not conversation memory (A-8)."
+  durability: "durable"
+  source:
+    requirements: [FR-18]
+    stories: [S-27]
+  attributes:
+    - name: "period"
+      type: "string"
+      required: true
+      unique: true
+      constraints: "The aggregation window key (e.g. ISO week); default period = week per FR-18. Exact period definition reused from GuardrailConfig.period-definition where applicable."
+    - name: "distinct-developers"
+      type: "integer"
+      required: true
+      min: 0
+      default: "0"
+      constraints: "Count of distinct author-ids (ENT-001.author-id) served in the period (FR-18/S-27)."
+    - name: "questions-handled"
+      type: "integer"
+      required: true
+      min: 0
+      default: "0"
+      constraints: "Count of questions processed to a resolved answer in the period (FR-18/S-27)."
+  constraints:
+    - "Aggregate operational data only — contains no conversation content (A-8/OOS-4); no secrets/PII (NFR-6)."
+    - "NOTE (M-2, PM contribution): questions-handled counts only jobs that reached `resolved` (successfully answered), per FR-18's 'served' wording — it is NOT a total-demand counter. Failed/denied asks are excluded, so this under-reports raw demand. Accepted for v1; a separate attempt/demand counter is a cheap additive change deferred to a later release if demand visibility is needed (not in scope here — no FR requires it)."
+
+- id: ENT-010
+  name: "FeedbackSignal"
+  component-id: CMP-007
+  component-name: "Operational Data Service"
+  description: "A helpfulness signal recorded against a specific answer for the success metric. Durable; append-only event log (Q4)."
+  durability: "durable"
+  source:
+    requirements: [FR-16, FR-18]
+    stories: [S-26]
+  attributes:
+    - name: "answer-ref"
+      type: "uuid"
+      required: true
+      references: "Answer.correlation-id"
+      constraints: "The answer this signal is about (DA-1); resolved from ReactionEvent.answer-message-ts at capture (BR-018)."
+    - name: "signal"
+      type: "enum"
+      required: true
+      values: [positive, negative]
+      constraints: "The helpfulness signal (👍 → positive, 👎 → negative)."
+    - name: "recorded-at"
+      type: "timestamp"
+      required: true
+      constraints: "When this signal row was appended; the tiebreaker for the latest-per-(answer, reactor, signal) aggregation (Q4/BR-020, F-1)."
+    - name: "reactor-id"        # +functional-design (Q4 support)
+      type: "string"
+      required: true
+      constraints: "Slack user id of the reacting developer; with answer-ref and signal forms the (answer, reactor, signal) aggregation key (Q4, refined for F-1)."
+    - name: "event-action"      # +functional-design (Q4 support)
+      type: "enum"
+      required: true
+      values: [added, removed]
+      constraints: "Whether this row records a reaction add or removal. A `removed` row withdraws the prior signal for the (answer, reactor, signal) triple at aggregation time — NOT for the whole reactor — so withdrawing 👎 does not erase a still-present 👍 (Q4, F-1)."
+  constraints:
+    - "REFINEMENT vs blueprint (Q4=b): the blueprint described ENT-010 as 'append-mostly'; this stage fixes it as an APPEND-ONLY event log. Rows are immutable and never updated/deleted on the hot path."
+    - "REFINEMENT (F-1, PM contribution): aggregation resolves each emoji independently. The success metric reads 'latest row per (answer-ref, reactor-id, SIGNAL) by recorded-at'; a triple whose latest row is event-action=removed is withdrawn for THAT signal only. The reactor's net signal is then derived from the still-present (non-withdrawn) signals. This prevents a withdrawn 👎 from collapsing a still-present 👍 to 'no signal' and keeps the FR-18 KPI honest (BR-020)."
+    - "Aggregate operational data only; no conversation content (A-8/OOS-4)."
+  relationships:
+    - entity-id: ENT-004
+      entity: "Answer"
+      cardinality: "N:1"
+      direction: "Many FeedbackSignal rows reference one Answer (by correlation-id)."
+
+- id: ENT-011
+  name: "UsageCounter"
+  component-id: CMP-007
+  component-name: "Operational Data Service"
+  description: "Per-period inference/MCP usage tally read on the hot path to enforce the cost guardrail (NFR-8). Durable; correctness-critical."
+  durability: "durable"
+  source:
+    requirements: [NFR-8]
+    stories: [S-18]
+  attributes:
+    - name: "period"
+      type: "string"
+      required: true
+      unique: true
+      constraints: "The guardrail window key, per GuardrailConfig.period-definition (ENT-014)."
+    - name: "usage-count"
+      type: "integer"
+      required: true
+      min: 0
+      default: "0"
+      constraints: "Accumulated inference/MCP usage in the period; compared to GuardrailConfig.per-period-limit for the within-budget decision (BR-008/BR-019)."
+    - name: "last-updated-at"
+      type: "timestamp"
+      required: true
+      constraints: "Time of the most recent increment; correctness-critical under concurrent workers (CS-1) — increments must be atomic so the guardrail is not undercounted (S-24)."
+  constraints:
+    - "Correctness-critical shared state: concurrent increments from multiple workers (S-24) must not lose updates; consistency model fixed in infrastructure-design."
+
+# =============================================================================
+# CMP-008 — Configuration & Policy (operator-set, read-mostly)
+# =============================================================================
+
+- id: ENT-012
+  name: "ChannelAllowlist"
+  component-id: CMP-008
+  component-name: "Configuration & Policy"
+  description: "The set of channels in which the bot is permitted to answer (FR-2). Operator-set configuration; read-mostly."
+  durability: "durable"
+  source:
+    requirements: [FR-2]
+    stories: [S-14, S-15]
+  attributes:
+    - name: "allowed-channel-ids"
+      type: "list<string>"
+      required: true
+      constraints: "Channel ids where the bot answers (e.g. #devops-help). Read-only by CMP-001 at intake (BR-001)."
+    - name: "non-allowlisted-behaviour"
+      type: "enum"
+      required: true
+      values: [silent, reply-not-designated]
+      default: "reply-not-designated"   # REFINEMENT (F-3, PM contribution): default flipped from `silent`
+      constraints: "Deterministic, operator-configured behaviour when mentioned outside the allowlist (FR-2/S-14): stay silent, or reply that the bot only operates in designated channels (BR-001). REFINEMENT (F-3): default flipped from `silent` to `reply-not-designated`. Rationale — the Developer persona explicitly states 'a request that hangs with no response is worse than a clear error', and S-14 exists to give a clear 'only operates in designated channels' signal so the developer is not left waiting. Both values remain FR-2-compliant; `silent` is now the operator opt-in for noise-sensitive channels, not the out-of-box default."
+  constraints:
+    - "Owned and edited only by operators (S-15); enforced by CMP-001, never by CMP-008 itself."
+
+- id: ENT-013
+  name: "UsagePolicy"
+  component-id: CMP-008
+  component-name: "Configuration & Policy"
+  description: "The published data-sensitivity policy: only internal/non-production content, no secrets/PII/customer data (NFR-3). Operator-set."
+  durability: "durable"
+  source:
+    requirements: [NFR-3]
+    stories: [S-17]
+  attributes:
+    - name: "policy-text"
+      type: "string"
+      required: true
+      constraints: "The published policy wording prohibiting secrets, credentials, PII, and customer/production data (NFR-3); enforced in part by the safety gate (FR-15/S-16)."
+    - name: "published-location-ref"
+      type: "string"
+      required: false
+      constraints: "Where the policy is published for developers (e.g. channel topic / pinned message ref) (S-17)."
+
+- id: ENT-014
+  name: "GuardrailConfig"
+  component-id: CMP-008
+  component-name: "Configuration & Policy"
+  description: "Operator-set cost-guardrail thresholds (per-request and/or per-period bound) consumed by the Operational Data Service (NFR-8). Concrete values set in nfr-design (A-7)."
+  durability: "durable"
+  source:
+    requirements: [NFR-8]
+    stories: [S-18]
+  attributes:
+    - name: "per-request-limit"
+      type: "integer"
+      required: false
+      min: 0
+      constraints: "Optional per-request usage bound. Named parameter; concrete value set in nfr-design (A-7)."
+    - name: "per-period-limit"
+      type: "integer"
+      required: false
+      min: 0
+      constraints: "Optional per-period usage bound compared against UsageCounter.usage-count for the within-budget decision (BR-008). Concrete value set in nfr-design (A-7)."
+    - name: "period-definition"
+      type: "string"
+      required: true
+      default: "week"
+      constraints: "Defines the period window used by UsageCounter (ENT-011) and, where aligned, AdoptionMetric (ENT-009). Concrete definition confirmed in nfr-design (A-7)."
+  constraints:
+    - "At least one of per-request-limit / per-period-limit MUST be set so the NFR-8 guardrail is enforceable (A-7)."
+
+# =============================================================================
+# Cross-entity correlation (DA-1)
+# =============================================================================
+# correlation-id chain: ENT-001.correlation-id == ENT-008.job-id == ENT-004.correlation-id
+#   and is referenced by ENT-010.answer-ref. This single id threads intake → job →
+#   answer → feedback for tracing and NFR-6 log hygiene. Preserved verbatim from the
+#   domain-design DA-1 refinement.
