@@ -14,6 +14,12 @@ variable "runtime" {
   description = "Lambda runtime."
 }
 
+variable "slack_bot_token" {
+  type        = string
+  sensitive   = true
+  description = "Slack bot OAuth token value (posts the FR-17 failure message)."
+}
+
 variable "artifact_s3_bucket" {
   type        = string
   description = "S3 bucket of the Lambda deployment package."

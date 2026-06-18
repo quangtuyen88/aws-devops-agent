@@ -8,6 +8,7 @@ work is enqueued for the worker. Slack at-least-once redelivery is absorbed by d
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
@@ -30,13 +31,29 @@ def lambda_handler(event: dict[str, Any], _context: object = None) -> dict[str, 
     """API Gateway proxy entrypoint for the Slack Events API."""
     settings = get_settings()
     raw_body = event.get("body") or ""
+    # API Gateway HTTP API may base64-encode the body; Slack signs the raw bytes, so decode
+    # before verifying or the HMAC never matches (BR-: signature over the exact payload).
+    if event.get("isBase64Encoded"):
+        raw_body = base64.b64decode(raw_body).decode("utf-8")
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
 
     verifier = SignatureVerifier(signing_secret=settings.slack_signing_secret)
     timestamp = headers.get("x-slack-request-timestamp", "")
     signature = headers.get("x-slack-signature", "")
     if not verifier.is_valid(raw_body, timestamp, signature):
-        _log.warning("rejected Slack request with invalid signature")
+        _log.warning(
+            "rejected Slack request with invalid signature",
+            extra={
+                "is_base64": bool(event.get("isBase64Encoded")),
+                "body_len": len(raw_body),
+                "ts": timestamp,
+                "sig_recv_prefix": signature[:10],
+                "sig_calc_prefix": (
+                    verifier.generate_signature(timestamp=timestamp, body=raw_body) or ""
+                )[:10],
+                "secret_len": len(settings.slack_signing_secret),
+            },
+        )
         return _response(401, "invalid signature")
 
     envelope = json.loads(raw_body) if raw_body else {}

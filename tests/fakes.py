@@ -51,7 +51,13 @@ class FakeJobCoordinator:
         self._by_answer_ts: dict[str, UUID] = {}
 
     def register_or_get(
-        self, identity: tuple[str, str], ref: OriginatingMessageRef, job_id: UUID, now: datetime
+        self,
+        identity: tuple[str, str],
+        ref: OriginatingMessageRef,
+        job_id: UUID,
+        now: datetime,
+        attached_file_name: str | None = None,
+        attached_file_text: str | None = None,
     ) -> tuple[ProcessingJob, bool]:
         if identity in self.jobs:
             return self.jobs[identity], False
@@ -63,6 +69,8 @@ class FakeJobCoordinator:
             status=JobStatus.SEEN,
             attempt_count=0,
             last_transition_at=now,
+            attached_file_name=attached_file_name,
+            attached_file_text=attached_file_text,
         )
         self.jobs[identity] = job
         return job, True
@@ -115,10 +123,15 @@ class FakeJobCoordinator:
 
 
 class FakeSlackGateway:
-    def __init__(self, thread: list[ThreadMessage] | None = None) -> None:
+    def __init__(
+        self, thread: list[ThreadMessage] | None = None, file_text: str = "FILE-CONTENT"
+    ) -> None:
         self.posts: list[tuple[OriginatingMessageRef, str]] = []
         self._thread = thread or []
         self.fail_on_post = False
+        self.fail_on_download = False
+        self._file_text = file_text
+        self.download_calls: list[str] = []
         self._counter = 0
 
     def fetch_thread(self, channel_id: str, thread_ts: str) -> list[ThreadMessage]:
@@ -130,6 +143,12 @@ class FakeSlackGateway:
         self.posts.append((ref, text))
         self._counter += 1
         return f"answer-ts-{self._counter}"
+
+    def download_file_text(self, download_url: str, max_bytes: int) -> str:
+        if self.fail_on_download:
+            raise RuntimeError("download failed")
+        self.download_calls.append(download_url)
+        return self._file_text[:max_bytes]
 
 
 class FakeWorkQueue:
@@ -167,13 +186,17 @@ class FakeInference:
         self._output = output
         self._tokens = tokens
         self.calls = 0
+        self.last_system: str | None = None
+        self.last_prompt: str | None = None
 
     @property
     def backend_id(self) -> str:
         return "fake"
 
-    def run_inference(self, prompt_input: str) -> InferenceExchange:
+    def run_inference(self, prompt_input: str, system: str | None = None) -> InferenceExchange:
         self.calls += 1
+        self.last_system = system
+        self.last_prompt = prompt_input
         return InferenceExchange(
             prompt_input="", model_output=self._output, token_usage=self._tokens, backend_id="fake"
         )

@@ -41,6 +41,7 @@ from ...resilience.circuit_breaker import CircuitBreaker, CircuitOpenError
 from ...resilience.clock import Clock
 from ...resilience.time_budget import TimeBudget, TimeBudgetExceededError
 from ..inference.provider import InferenceFailureError
+from ..inference.system_prompt import GUARDRAIL_SYSTEM_PROMPT
 from .heartbeat import HeartbeatEmitter
 from .rendering import render_answer, render_failure
 
@@ -156,6 +157,10 @@ class Worker:
             with self._heartbeat(job.originating_message_ref):
                 result = self._run_pipeline(job, budget)
         except _ProcessingError as err:
+            log.warning(
+                f"pipeline terminal failure cause={err.cause.value} "
+                f"root_cause={type(err.__cause__).__name__}: {err.__cause__}"
+            )
             self._fail(identity, job, err.cause, err.secret_classes)
             self.metrics.count("failure_by_cause", cause=err.cause.value)
             return self._record(WorkerOutcome.FAILED)
@@ -189,6 +194,14 @@ class Worker:
         )
         question = self._extract_question(thread, ref.message_ts)
         assembled = self._assemble(question, thread)
+
+        # Include an attached file (downloaded + validated at intake) in the review input. It
+        # becomes part of `assembled`, so the step-4 size gate and step-5 safety scan cover it too.
+        if job.attached_file_text:
+            name = job.attached_file_name or "attachment"
+            assembled = (
+                f"{assembled}\n\nATTACHED FILE ({name}):\n```\n{job.attached_file_text}\n```"
+            )
 
         # Step 4 — size gate (BR-007 / NFR-14 hybrid trim-or-reject).
         assembled = self._enforce_size(ref, question, assembled)
@@ -234,7 +247,9 @@ class Worker:
         mcp_calls += 1
 
         exchange = self._guarded(
-            "inference", lambda: self.inference.run_inference(assembled), budget
+            "inference",
+            lambda: self.inference.run_inference(assembled, system=GUARDRAIL_SYSTEM_PROMPT),
+            budget,
         )
         inference_calls += 1
         self.metrics.count("inference_calls", float(inference_calls))

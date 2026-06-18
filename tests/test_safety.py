@@ -16,6 +16,9 @@ SECRET_CORPUS = [
     "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
     "db url postgres://admin:s3cr3tPassword@db.internal:5432/app",
     "api_key: 1234567890abcdef1234567890",
+    # A genuinely random, high-entropy base64 token (no recognizable prefix) must still flag via
+    # the entropy backstop even after the threshold was raised to reduce IaC false positives.
+    "token blob 7kQx2pLm9vRtZ4Nw8sFhB3jYcA6dKeUgW1oIqP5XnMa0bThlD",
 ]
 
 BENIGN_CORPUS = [
@@ -23,6 +26,11 @@ BENIGN_CORPUS = [
     "What is the cheapest way to store infrequently accessed objects in S3?",
     "Why is my Lambda timing out when calling DynamoDB?",
     "Should I use ECS Fargate or EKS for a small service?",
+    # IaC identifiers that previously false-flagged as high-entropy strings (BR-012 regression):
+    # long descriptive AWS role/policy/export names are not credentials.
+    "RoleARN: AWSServiceRoleForApplicationAutoScaling_ECSService is a managed service role",
+    "ManagedPolicyArns include AmazonECSTaskExecutionRolePolicy for the task",
+    "Export Name exploreS3EcsTaskExecutionRoleArnExportName for the stack output",
 ]
 
 

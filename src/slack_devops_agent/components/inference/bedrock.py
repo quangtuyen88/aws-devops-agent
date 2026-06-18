@@ -33,13 +33,20 @@ class BedrockBackend:
     def backend_id(self) -> str:
         return _BACKEND_ID
 
-    def run_inference(self, prompt_input: str) -> InferenceExchange:
-        """Invoke Bedrock Converse; map throttling to retryable, else typed failure."""
+    def run_inference(self, prompt_input: str, system: str | None = None) -> InferenceExchange:
+        """Invoke Bedrock Converse; map throttling to retryable, else typed failure.
+
+        ``system`` becomes the Converse ``system`` block (outranks user content) so the
+        operator guardrail cannot be overridden by instructions inside ``prompt_input``.
+        """
+        kwargs: dict[str, Any] = {
+            "modelId": self._model_id,
+            "messages": [{"role": "user", "content": [{"text": prompt_input}]}],
+        }
+        if system:
+            kwargs["system"] = [{"text": system}]
         try:
-            response = self._client.converse(
-                modelId=self._model_id,
-                messages=[{"role": "user", "content": [{"text": prompt_input}]}],
-            )
+            response = self._client.converse(**kwargs)
         except ClientError as err:
             code = err.response.get("Error", {}).get("Code", "")
             if code in _THROTTLE_CODES:

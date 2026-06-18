@@ -10,6 +10,7 @@ import json
 from uuid import UUID
 
 from ..components.intake import IntakeHandler, IntakeOutcome, parse_mention, parse_reaction
+from ..components.intake.parsing import pick_reviewable_file
 
 _MENTION_EVENT_TYPES = {"app_mention", "message"}
 _REACTION_EVENT_TYPES = {"reaction_added", "reaction_removed"}
@@ -29,7 +30,7 @@ def dispatch_slack_event(
 
     if event_type in _MENTION_EVENT_TYPES:
         mention = parse_mention(event, bot_user_id, retry_num=retry_num)
-        return handler.handle_mention(mention)
+        return handler.handle_mention(mention, pick_reviewable_file(event))
 
     if event_type in _REACTION_EVENT_TYPES:
         reaction = parse_reaction(event)

@@ -176,6 +176,19 @@ variable "mcp_base_url" {
   default     = ""
 }
 
+variable "slack_bot_user_id" {
+  description = "Slack bot user id (self-mention suppression). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "mcp_api_key" {
+  description = "AWS Knowledge MCP API key (empty for the public, unauthenticated endpoint)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log group retention."
   type        = number

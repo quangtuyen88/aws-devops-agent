@@ -34,6 +34,9 @@ resource "aws_lambda_function" "intake" {
       LEASE_STALENESS_SECONDS     = tostring(var.lease_staleness_seconds)
       REQUEST_TIME_BUDGET_SECONDS = tostring(var.request_budget_seconds)
       MAX_ATTEMPTS                = tostring(var.max_attempts)
+      SLACK_SIGNING_SECRET        = var.slack_signing_secret
+      SLACK_BOT_TOKEN             = var.slack_bot_token
+      SLACK_BOT_USER_ID           = var.slack_bot_user_id
     }
   }
 

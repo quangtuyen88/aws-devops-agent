@@ -41,6 +41,9 @@ resource "aws_lambda_function" "worker" {
       LEASE_STALENESS_SECONDS     = tostring(var.lease_staleness_seconds)
       HEARTBEAT_SECONDS           = tostring(var.heartbeat_seconds)
       MAX_ATTEMPTS                = tostring(var.max_attempts)
+      SLACK_BOT_TOKEN             = var.slack_bot_token
+      PROXY_API_KEY               = var.proxy_api_key
+      MCP_API_KEY                 = var.mcp_api_key
     }
   }
 

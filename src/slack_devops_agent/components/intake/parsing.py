@@ -7,6 +7,8 @@ so internal entities stay stable. Pure parsing — no I/O.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from uuid import uuid4
 
 from ...domain.entities import InboundMention, ReactionEvent
@@ -14,6 +16,61 @@ from ...domain.enums import EventAction, ReactionKind
 
 _POSITIVE_EMOJI = {"+1", "thumbsup", "thumbsup_all"}
 _NEGATIVE_EMOJI = {"-1", "thumbsdown"}
+
+# Reviewable text/IaC attachments only — never binaries/images/archives (which would feed junk
+# bytes into the prompt). Matched on the file name suffix and Slack's filetype.
+_REVIEWABLE_SUFFIXES = (".yaml", ".yml", ".json", ".tf", ".hcl", ".txt", ".md", ".template")
+_REVIEWABLE_FILETYPES = {"yaml", "yml", "json", "tf", "hcl", "text", "markdown", "template"}
+# 256 KB cap so a large upload can't blow the prompt budget or Lambda memory.
+MAX_ATTACHED_FILE_BYTES = 262144
+
+
+class FileReject(StrEnum):
+    """Why a candidate attachment was not accepted (drives the user-facing notice)."""
+
+    WRONG_TYPE = "wrong-type"
+    OVERSIZE = "oversize"
+
+
+@dataclass(frozen=True)
+class ReviewableFile:
+    """A validated, downloadable attachment reference (no content yet)."""
+
+    name: str
+    download_url: str
+    size: int
+
+
+def pick_reviewable_file(
+    event: dict[str, object], max_bytes: int = MAX_ATTACHED_FILE_BYTES
+) -> ReviewableFile | FileReject | None:
+    """Select the first attachment worth reviewing, or a rejection reason, or None.
+
+    Pure (no IO): validates the file's type (allowlist) and size against ``max_bytes`` so the
+    handler can download only safe, bounded files. Returns ``None`` when the message carries no
+    files at all; a :class:`FileReject` when a file is present but unsupported/oversize.
+    """
+    files = event.get("files")
+    if not isinstance(files, list) or not files:
+        return None
+    oversize = False
+    for entry in files:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "")
+        filetype = str(entry.get("filetype") or "").lower()
+        if not (name.lower().endswith(_REVIEWABLE_SUFFIXES) or filetype in _REVIEWABLE_FILETYPES):
+            continue
+        url = str(entry.get("url_private_download") or entry.get("url_private") or "")
+        size = int(entry["size"]) if str(entry.get("size") or "").isdigit() else 0
+        if size > max_bytes:
+            oversize = True
+            continue
+        if url:
+            return ReviewableFile(name=name, download_url=url, size=size)
+    if oversize:
+        return FileReject.OVERSIZE
+    return FileReject.WRONG_TYPE
 
 
 def parse_mention(event: dict[str, object], bot_user_id: str, retry_num: int = 0) -> InboundMention:

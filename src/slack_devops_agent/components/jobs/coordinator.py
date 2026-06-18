@@ -49,7 +49,13 @@ class DynamoJobCoordinator:
     # -- registration / dedup (BR-010) --------------------------------------
 
     def register_or_get(
-        self, identity: tuple[str, str], ref: OriginatingMessageRef, job_id: UUID, now: datetime
+        self,
+        identity: tuple[str, str],
+        ref: OriginatingMessageRef,
+        job_id: UUID,
+        now: datetime,
+        attached_file_name: str | None = None,
+        attached_file_text: str | None = None,
     ) -> tuple[ProcessingJob, bool]:
         pk = _identity_key(identity)
         item: dict[str, Any] = {
@@ -63,6 +69,9 @@ class DynamoJobCoordinator:
             "attempt_count": 0,
             "last_transition_at": now.isoformat(),
         }
+        if attached_file_text:
+            item["attached_file_text"] = attached_file_text
+            item["attached_file_name"] = attached_file_name or ""
         try:
             self._table.put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
             return self._to_job(item), True
@@ -210,4 +219,6 @@ class DynamoJobCoordinator:
             last_transition_at=datetime.fromisoformat(str(item["last_transition_at"])),
             post_intent_at=post_intent_at,
             answer_message_ts=answer_ts,
+            attached_file_name=str(item.get("attached_file_name") or "") or None,
+            attached_file_text=str(item.get("attached_file_text") or "") or None,
         )

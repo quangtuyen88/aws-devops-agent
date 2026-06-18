@@ -27,6 +27,7 @@ resource "aws_lambda_function" "reaper" {
       DLQ_URL                 = var.dlq_url
       LEASE_STALENESS_SECONDS = tostring(var.lease_staleness_seconds)
       MAX_ATTEMPTS            = tostring(var.max_attempts)
+      SLACK_BOT_TOKEN         = var.slack_bot_token
     }
   }
 

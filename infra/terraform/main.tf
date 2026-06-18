@@ -26,6 +26,22 @@ locals {
   dlq_name             = "${var.name_prefix}-work-queue-dlq"
 }
 
+# Secret values injected into the Lambda environment. NOTE: this materializes the secret values
+# into Terraform state and the Lambda console env (the chosen plaintext-env wiring). Keep the
+# state bucket locked down. The containers are populated out of band (scripts/load-secrets.sh);
+# these data sources read the current version each apply.
+data "aws_secretsmanager_secret_version" "slack_bot" {
+  secret_id = module.security.secret_arns["slack_bot"]
+}
+
+data "aws_secretsmanager_secret_version" "slack_signing" {
+  secret_id = module.security.secret_arns["slack_signing"]
+}
+
+data "aws_secretsmanager_secret_version" "kiro_proxy_key" {
+  secret_id = module.security.secret_arns["kiro_proxy_key"]
+}
+
 module "security" {
   source = "./modules/security"
 
@@ -148,6 +164,9 @@ module "compute_intake" {
   lease_staleness_seconds = var.lease_staleness_seconds
   request_budget_seconds  = var.request_time_budget_seconds
   max_attempts            = var.max_receive_count
+  slack_signing_secret    = data.aws_secretsmanager_secret_version.slack_signing.secret_string
+  slack_bot_token         = data.aws_secretsmanager_secret_version.slack_bot.secret_string
+  slack_bot_user_id       = var.slack_bot_user_id
 }
 
 module "compute_worker" {
@@ -176,6 +195,9 @@ module "compute_worker" {
   lease_staleness_seconds      = var.lease_staleness_seconds
   heartbeat_seconds            = var.heartbeat_seconds
   max_attempts                 = var.max_receive_count
+  slack_bot_token              = data.aws_secretsmanager_secret_version.slack_bot.secret_string
+  proxy_api_key                = data.aws_secretsmanager_secret_version.kiro_proxy_key.secret_string
+  mcp_api_key                  = var.mcp_api_key
 }
 
 module "recovery" {
@@ -191,4 +213,5 @@ module "recovery" {
   table_processing_job    = local.table_processing_job
   lease_staleness_seconds = var.lease_staleness_seconds
   max_attempts            = var.max_receive_count
+  slack_bot_token         = data.aws_secretsmanager_secret_version.slack_bot.secret_string
 }

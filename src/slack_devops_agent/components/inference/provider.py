@@ -38,6 +38,7 @@ def build_inference_provider(settings: Settings) -> InferenceProvider:
             base_url=settings.kiro_gateway_base_url,
             api_key=settings.proxy_api_key,
             model=settings.kiro_model,
+            timeout_seconds=settings.kiro_timeout_seconds,
         )
     if backend == "bedrock":
         import boto3

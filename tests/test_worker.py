@@ -29,9 +29,22 @@ from .fakes import (
 IDENTITY = ("C1", "111.1")
 
 
-def _seed_job(jobs: FakeJobCoordinator, clock: FakeClock) -> None:
+def _seed_job(
+    jobs: FakeJobCoordinator,
+    clock: FakeClock,
+    *,
+    file_name: str | None = None,
+    file_text: str | None = None,
+) -> None:
     ref = OriginatingMessageRef(channel_id="C1", thread_ts=None, message_ts="111.1", author_id="U1")
-    jobs.register_or_get(IDENTITY, ref, uuid4(), clock.now())
+    jobs.register_or_get(
+        IDENTITY,
+        ref,
+        uuid4(),
+        clock.now(),
+        attached_file_name=file_name,
+        attached_file_text=file_text,
+    )
 
 
 def _worker(
@@ -89,6 +102,8 @@ def test_happy_path_resolves_and_posts_ungrounded() -> None:
     assert deps["opdata"].adoptions == ["U1"]  # type: ignore[attr-defined]
     # F8: answer ts stamped for later reaction resolution
     assert jobs.get(IDENTITY).answer_message_ts is not None  # type: ignore[union-attr]
+    # Guardrail: the operator system prompt is sent on the inference call (scope/PII/injection)
+    assert "architecture" in (deps["inference"].last_system or "").lower()  # type: ignore[attr-defined]
 
 
 def test_grounded_answer_carries_citations() -> None:
@@ -121,6 +136,41 @@ def test_safety_refuse_blocks_inference_and_fails() -> None:
     # CS-4: a refuse verdict must block any inference call (NFR-4 invariant)
     assert inference.calls == 0
     assert any("secret" in t.lower() for _, t in deps["slack"].posts)  # type: ignore[attr-defined]
+
+
+def test_attached_file_text_reaches_inference_prompt() -> None:
+    jobs = FakeJobCoordinator()
+    clock = FakeClock()
+    _seed_job(
+        jobs,
+        clock,
+        file_name="explore-s3.yaml",
+        file_text="AWSTemplateFormatVersion: 2010-09-09",
+    )
+    inference = FakeInference()
+    worker, _ = _worker(jobs=jobs, clock=clock, inference=inference)
+    assert worker.process(IDENTITY, uuid4(), "U1") == WorkerOutcome.RESOLVED
+    assert "ATTACHED FILE (explore-s3.yaml)" in (inference.last_prompt or "")
+    assert "AWSTemplateFormatVersion" in (inference.last_prompt or "")
+
+
+def test_attached_file_with_secret_is_refused_by_safety_gate() -> None:
+    from slack_devops_agent.components.safety import SecretScanner
+
+    jobs = FakeJobCoordinator()
+    clock = FakeClock()
+    _seed_job(
+        jobs,
+        clock,
+        file_name="creds.tf",
+        file_text='provider "aws" { access_key = "AKIAIOSFODNN7EXAMPLE" }',
+    )
+    inference = FakeInference()
+    worker, _ = _worker(jobs=jobs, clock=clock, safety=SecretScanner(), inference=inference)
+    outcome = worker.process(IDENTITY, uuid4(), "U1")
+    assert outcome == WorkerOutcome.FAILED
+    # The secret inside the uploaded file must block inference (never forwarded to the gateway).
+    assert inference.calls == 0
 
 
 def test_budget_deny_fails_with_reask_message() -> None:
