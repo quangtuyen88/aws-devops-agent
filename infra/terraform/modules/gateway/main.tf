@@ -61,7 +61,7 @@ resource "aws_ecs_cluster" "this" {
 resource "aws_security_group" "alb" {
   count       = var.use_existing_alb ? 0 : 1
   name        = "${var.name_prefix}-gateway-alb-sg"
-  description = "Internal ALB for kiro-gateway — 443 from the worker SG only."
+  description = "Internal ALB for kiro-gateway - 443 from the worker SG only."
   vpc_id      = var.vpc_id
 
   ingress {
@@ -84,7 +84,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group" "service" {
   name        = "${var.name_prefix}-gateway-svc-sg"
-  description = "kiro-gateway tasks — accept only from the internal ALB."
+  description = "kiro-gateway tasks - accept only from the internal ALB."
   vpc_id      = var.vpc_id
 
   ingress {

@@ -38,6 +38,10 @@ class InboundMention(BaseModel):
     is_bot_author: bool = False
     raw_text: str
     slack_retry_num: int = Field(default=0, ge=0)
+    # A reviewable text/IaC file attached to the message, downloaded and validated at intake
+    # (type allowlist + size cap). None when no attachment, or one that failed validation.
+    attached_file_name: str | None = None
+    attached_file_text: str | None = None
 
     @property
     def slack_event_identity(self) -> tuple[str, str]:
@@ -185,6 +189,10 @@ class ProcessingJob(BaseModel):
     # detectable on recovery — a reclaiming worker that sees this set MUST NOT repost.
     post_intent_at: datetime | None = None
     answer_message_ts: str | None = None  # F8: stamped at answer-post; GSI key
+    # Validated text of a file attached to the originating message, carried so the worker can
+    # include it in the review prompt (the worker rebuilds context from Slack, which drops files).
+    attached_file_name: str | None = None
+    attached_file_text: str | None = None
 
     @property
     def post_attempted(self) -> bool:

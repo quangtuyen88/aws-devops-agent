@@ -29,10 +29,50 @@ locals {
 
 # --- Customer-managed KMS key (NFR-5: data/secrets/queues/logs at rest) ---
 
+# Explicit key policy: keep root as key admin (preserves the IAM-grant path that DynamoDB,
+# SQS, and Secrets Manager use), and add the CloudWatch Logs SERVICE principal so KMS-encrypted
+# log groups can be created. Logs uses the CMK as the service itself, which the AWS default key
+# policy does not grant — scoped here to this stack's log groups via an ArnLike condition.
+data "aws_iam_policy_document" "kms_key" {
+  statement {
+    sid       = "EnableRootAccount"
+    effect    = "Allow"
+    actions   = ["kms:*"]
+    resources = ["*"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:${local.partition}:iam::${local.account_id}:root"]
+    }
+  }
+
+  statement {
+    sid    = "AllowCloudWatchLogs"
+    effect = "Allow"
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+    principals {
+      type        = "Service"
+      identifiers = ["logs.${local.region}.amazonaws.com"]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values   = ["arn:${local.partition}:logs:${local.region}:${local.account_id}:log-group:*"]
+    }
+  }
+}
+
 resource "aws_kms_key" "app" {
   description             = "${var.name_prefix} customer-managed key (DynamoDB, SQS, Secrets, Logs)"
   deletion_window_in_days = 30
   enable_key_rotation     = true
+  policy                  = data.aws_iam_policy_document.kms_key.json
   tags                    = var.tags
 }
 
@@ -171,7 +211,7 @@ data "aws_iam_policy_document" "worker" {
 data "aws_iam_policy_document" "reaper" {
   statement {
     sid       = "AbandonJobs"
-    actions   = ["dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query"]
+    actions   = ["dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
     resources = [local.arn_table_processing_job, "${local.arn_table_processing_job}/index/*"]
   }
   statement {

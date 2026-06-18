@@ -30,11 +30,18 @@ from ...ports import (
     WorkQueue,
 )
 from ...resilience.clock import Clock
-from .parsing import mentions_bot
+from .parsing import MAX_ATTACHED_FILE_BYTES, FileReject, ReviewableFile, mentions_bot
 
 _ACK_TEXT = "On it — looking into your question now. :hourglass_flowing_sand:"
 _NOT_DESIGNATED_TEXT = (
     "I only operate in designated DevOps channels. Please ask in an allowlisted channel."
+)
+_FILE_WRONG_TYPE_TEXT = (
+    "I can only review text/IaC files (YAML/JSON/Terraform/etc.). I'll answer from your message "
+    "text; paste the relevant snippet if you want me to review it."
+)
+_FILE_OVERSIZE_TEXT = (
+    "That file is too large for me to review. Paste the relevant section into the thread instead."
 )
 
 
@@ -63,8 +70,16 @@ class IntakeHandler:
     bot_user_id: str
     metrics: Metrics
 
-    def handle_mention(self, mention: InboundMention) -> IntakeOutcome:
-        """W1 — filter, dedup-register, ack, enqueue. Returns the outcome."""
+    def handle_mention(
+        self,
+        mention: InboundMention,
+        attachment: ReviewableFile | FileReject | None = None,
+    ) -> IntakeOutcome:
+        """W1 — filter, dedup-register, ack, enqueue. Returns the outcome.
+
+        ``attachment`` is the validated file pick (or rejection reason) for any file on the
+        message; an accepted file is downloaded and attached to the job for the worker to review.
+        """
         log = get_logger(__name__, str(mention.correlation_id))
 
         if rules.is_bot_authored(mention):  # BR-002
@@ -78,12 +93,18 @@ class IntakeHandler:
                 self.slack.post_message(self._ref(mention), _NOT_DESIGNATED_TEXT)
             return self._record(IntakeOutcome.NOT_ALLOWLISTED)
 
+        # Attachment: download an accepted file (best-effort); notify on an unsupported one and
+        # continue with a text-only review rather than failing the question.
+        file_name, file_text = self._ingest_attachment(mention, attachment)
+
         # BR-010: register-or-get by identity; a redelivery attaches to the existing job.
         job, created = self.jobs.register_or_get(
             mention.slack_event_identity,
             self._ref(mention),
             mention.correlation_id,
             self.clock.now(),
+            attached_file_name=file_name,
+            attached_file_text=file_text,
         )
         if not created:
             log.info(
@@ -121,6 +142,30 @@ class IntakeHandler:
             )
         )
         return self._record(IntakeOutcome.FEEDBACK_RECORDED)
+
+    def _ingest_attachment(
+        self,
+        mention: InboundMention,
+        attachment: ReviewableFile | FileReject | None,
+    ) -> tuple[str | None, str | None]:
+        """Resolve an attachment to (name, text) for the job; post a notice on rejection.
+
+        Download failure (e.g. missing `files:read` scope) degrades to a text-only review.
+        """
+        if attachment is None:
+            return None, None
+        if attachment is FileReject.WRONG_TYPE:
+            self.slack.post_message(self._ref(mention), _FILE_WRONG_TYPE_TEXT)
+            return None, None
+        if attachment is FileReject.OVERSIZE:
+            self.slack.post_message(self._ref(mention), _FILE_OVERSIZE_TEXT)
+            return None, None
+        try:
+            text = self.slack.download_file_text(attachment.download_url, MAX_ATTACHED_FILE_BYTES)
+        except Exception:
+            get_logger(__name__).warning("attachment download failed; reviewing text-only")
+            return None, None
+        return attachment.name, text
 
     @staticmethod
     def _ref(mention: InboundMention) -> OriginatingMessageRef:

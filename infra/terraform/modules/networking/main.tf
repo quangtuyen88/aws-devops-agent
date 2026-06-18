@@ -174,7 +174,7 @@ resource "aws_route_table_association" "private" {
 resource "aws_security_group" "worker" {
   count       = local.create_network ? 1 : 0
   name        = "${var.name_prefix}-worker-sg"
-  description = "Worker Lambda ENIs — outbound HTTPS only."
+  description = "Worker Lambda ENIs - outbound HTTPS only."
   vpc_id      = aws_vpc.this[0].id
 
   egress {
@@ -193,7 +193,7 @@ resource "aws_security_group" "worker" {
 resource "aws_security_group" "endpoints" {
   count       = local.any_interface_endpoint ? 1 : 0
   name        = "${var.name_prefix}-vpce-sg"
-  description = "Interface VPC endpoints — accept 443 from inside the VPC."
+  description = "Interface VPC endpoints - accept 443 from inside the VPC."
   vpc_id      = local.vpc_id
 
   ingress {

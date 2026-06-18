@@ -22,6 +22,8 @@ ENV_FILE="${REPO_ROOT}/deploy.env"
 DO_APPLY="false"
 AUTO_APPROVE="false"
 LOAD_KIRO_CREDS="false"
+LOAD_SECRETS="true"
+SECRETS_ENV_FILE="${REPO_ROOT}/.env"
 
 usage() {
   cat <<'EOF'
@@ -36,6 +38,9 @@ Options:
       --load-kiro-creds   After a successful apply, extract Kiro creds from the local
                           kiro-cli DB and push them to the gateway secret (requires --apply,
                           aws CLI, sqlite3, jq). Runs scripts/kiro-creds-to-secret.sh.
+      --no-load-secrets   Skip auto-pushing application secrets from .env after apply.
+      --secrets-env-file <path>
+                          .env file to read application secrets from (default: ./.env).
   -h, --help              Show this help and exit.
 
 The env file must export the existing network IDs and backend config; see
@@ -66,6 +71,18 @@ while [[ $# -gt 0 ]]; do
   --load-kiro-creds)
     LOAD_KIRO_CREDS="true"
     shift
+    ;;
+  --no-load-secrets)
+    LOAD_SECRETS="false"
+    shift
+    ;;
+  --secrets-env-file)
+    [[ $# -ge 2 ]] || {
+      echo "error: ${1} requires a path argument" >&2
+      exit 2
+    }
+    SECRETS_ENV_FILE="$2"
+    shift 2
     ;;
   -h | --help)
     usage
@@ -141,6 +158,8 @@ export TF_VAR_existing_security_group_ids="${EXISTING_SECURITY_GROUP_IDS}"
 [[ -n "${GATEWAY_CERTIFICATE_ARN:-}" ]] && export TF_VAR_gateway_certificate_arn="${GATEWAY_CERTIFICATE_ARN}"
 [[ -n "${LAMBDA_ARTIFACT_S3_BUCKET:-}" ]] && export TF_VAR_lambda_artifact_s3_bucket="${LAMBDA_ARTIFACT_S3_BUCKET}"
 [[ -n "${LAMBDA_ARTIFACT_S3_KEY:-}" ]] && export TF_VAR_lambda_artifact_s3_key="${LAMBDA_ARTIFACT_S3_KEY}"
+[[ -n "${SLACK_BOT_USER_ID:-}" ]] && export TF_VAR_slack_bot_user_id="${SLACK_BOT_USER_ID}"
+[[ -n "${MCP_API_KEY:-}" ]] && export TF_VAR_mcp_api_key="${MCP_API_KEY}"
 
 # --- Run terraform ---------------------------------------------------------
 cd "${TF_DIR}"
@@ -159,6 +178,15 @@ if [[ "${DO_APPLY}" == "true" ]]; then
     terraform apply -input=false -auto-approve
   else
     terraform apply -input=false
+  fi
+
+  if [[ "${LOAD_SECRETS}" == "true" ]]; then
+    if [[ -f "${SECRETS_ENV_FILE}" ]]; then
+      echo "==> loading application secrets from ${SECRETS_ENV_FILE} (post-apply)"
+      "${SCRIPT_DIR}/load-secrets.sh" -e "${SECRETS_ENV_FILE}" -p "${NAME_PREFIX}" -r "${AWS_REGION}"
+    else
+      echo "==> skip application secrets: ${SECRETS_ENV_FILE} not found (use --secrets-env-file or --no-load-secrets)" >&2
+    fi
   fi
 
   if [[ "${LOAD_KIRO_CREDS}" == "true" ]]; then

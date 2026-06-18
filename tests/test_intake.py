@@ -11,6 +11,11 @@ from slack_devops_agent.components.intake import (
     parse_mention,
     parse_reaction,
 )
+from slack_devops_agent.components.intake.parsing import (
+    FileReject,
+    ReviewableFile,
+    pick_reviewable_file,
+)
 from slack_devops_agent.domain.entities import InboundMention
 from slack_devops_agent.domain.enums import EventAction, ReactionKind
 from slack_devops_agent.observability.metrics import Metrics
@@ -71,6 +76,82 @@ def test_parse_reaction_filters_non_thumbs() -> None:
     base = {"type": "reaction_added", "user": "U2", "item": {"type": "message", "ts": "9.9"}}
     assert parse_reaction({**base, "reaction": "+1"}).reaction_kind == ReactionKind.POSITIVE  # type: ignore[union-attr]
     assert parse_reaction({**base, "reaction": "tada"}) is None
+
+
+# --- attachment selection --------------------------------------------------
+
+
+def test_pick_reviewable_file_selects_yaml() -> None:
+    event = {
+        "files": [
+            {
+                "name": "explore-s3.yaml",
+                "filetype": "yaml",
+                "size": 1024,
+                "url_private_download": "https://files.slack/x",
+            }
+        ]
+    }
+    picked = pick_reviewable_file(event)
+    assert isinstance(picked, ReviewableFile)
+    assert picked.name == "explore-s3.yaml"
+    assert picked.download_url == "https://files.slack/x"
+
+
+def test_pick_reviewable_file_rejects_binary_type() -> None:
+    event = {
+        "files": [
+            {"name": "diagram.png", "filetype": "png", "size": 1024, "url_private_download": "u"}
+        ]
+    }
+    assert pick_reviewable_file(event) is FileReject.WRONG_TYPE
+
+
+def test_pick_reviewable_file_rejects_oversize() -> None:
+    event = {
+        "files": [
+            {"name": "big.tf", "filetype": "tf", "size": 10_000_000, "url_private_download": "u"}
+        ]
+    }
+    assert pick_reviewable_file(event) is FileReject.OVERSIZE
+
+
+def test_pick_reviewable_file_none_when_no_files() -> None:
+    assert pick_reviewable_file({"text": "hi"}) is None
+
+
+# --- attachment ingest in the handler --------------------------------------
+
+
+def test_handler_attaches_downloaded_file_to_job() -> None:
+    handler, deps = _handler()
+    file = ReviewableFile(name="explore-s3.yaml", download_url="https://files.slack/x", size=20)
+    deps["slack"]._file_text = "AWSTemplateFormatVersion: 2010-09-09"  # type: ignore[attr-defined]
+    outcome = handler.handle_mention(_mention(), file)
+    assert outcome == IntakeOutcome.ACCEPTED
+    job = deps["jobs"].jobs[("C1", "111.1")]  # type: ignore[attr-defined]
+    assert job.attached_file_name == "explore-s3.yaml"
+    assert "AWSTemplateFormatVersion" in (job.attached_file_text or "")
+    assert deps["slack"].download_calls == ["https://files.slack/x"]  # type: ignore[attr-defined]
+
+
+def test_handler_notifies_and_continues_on_wrong_type() -> None:
+    handler, deps = _handler()
+    outcome = handler.handle_mention(_mention(), FileReject.WRONG_TYPE)
+    assert outcome == IntakeOutcome.ACCEPTED  # text-only review still proceeds
+    assert any("text/IaC" in t for _, t in deps["slack"].posts)  # type: ignore[attr-defined]
+    job = deps["jobs"].jobs[("C1", "111.1")]  # type: ignore[attr-defined]
+    assert job.attached_file_text is None
+
+
+def test_handler_degrades_when_download_fails() -> None:
+    handler, deps = _handler()
+    deps["slack"].fail_on_download = True  # type: ignore[attr-defined]
+    file = ReviewableFile(name="x.yaml", download_url="u", size=10)
+    outcome = handler.handle_mention(_mention(), file)
+    assert outcome == IntakeOutcome.ACCEPTED
+    job = deps["jobs"].jobs[("C1", "111.1")]  # type: ignore[attr-defined]
+    assert job.attached_file_text is None
 
 
 # --- W1 outcomes -----------------------------------------------------------

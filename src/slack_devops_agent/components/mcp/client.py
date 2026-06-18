@@ -37,7 +37,9 @@ class McpGroundingClient:
     def ground(self, query: str) -> list[GroundingSource]:
         """Return zero-or-more citable sources for ``query`` (empty ⇒ ungrounded)."""
         client = self._client or httpx.Client(timeout=self._timeout)
-        headers = {"Authorization": f"Bearer {self._api_key}"}
+        # The AWS Knowledge MCP endpoint is public; only send auth when a key is configured
+        # (an empty key would produce an illegal `Bearer ` header value).
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
             response = client.post(
                 f"{self._base_url}/tools/{self._tool_name}",

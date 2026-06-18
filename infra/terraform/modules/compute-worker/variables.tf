@@ -14,6 +14,25 @@ variable "runtime" {
   description = "Lambda runtime."
 }
 
+variable "slack_bot_token" {
+  type        = string
+  sensitive   = true
+  description = "Slack bot OAuth token value (posts answers/failures)."
+}
+
+variable "proxy_api_key" {
+  type        = string
+  sensitive   = true
+  description = "kiro-gateway PROXY_API_KEY value (bearer to the inference gateway)."
+}
+
+variable "mcp_api_key" {
+  type        = string
+  default     = ""
+  sensitive   = true
+  description = "AWS Knowledge MCP API key value (empty for the public, unauthenticated endpoint)."
+}
+
 variable "artifact_s3_bucket" {
   type        = string
   description = "S3 bucket of the Lambda deployment package."

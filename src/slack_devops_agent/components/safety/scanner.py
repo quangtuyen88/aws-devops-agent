@@ -45,7 +45,19 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 _HIGH_ENTROPY_TOKEN = re.compile(r"\b[A-Za-z0-9+/=_\-]{32,}\b")
-_HIGH_ENTROPY_BITS_PER_CHAR = 4.0
+# Raised from 4.0: descriptive CamelCase identifiers common in IaC (long AWS role/policy/export
+# names) sit ~4.1-4.3 bits/char and were false-flagged. Genuinely random base64/hex secrets sit
+# ~4.6+. The precise prefix rules above (AKIA/xox-/ghp_/etc.) catch structured tokens regardless.
+_HIGH_ENTROPY_BITS_PER_CHAR = 4.6
+# A token that is purely alphabetic (after stripping word separators) is a descriptive identifier,
+# never a credential — real secrets always mix in digits or base64 symbols. Exempted from the
+# entropy heuristic to stop IaC identifiers (e.g. AWSServiceRoleForApplicationAutoScaling) flagging.
+_ALPHABETIC_IDENTIFIER = re.compile(r"^[A-Za-z]+$")
+
+
+def _is_alphabetic_identifier(token: str) -> bool:
+    """True when ``token`` is only letters once `_`/`-` separators are removed (not a secret)."""
+    return bool(_ALPHABETIC_IDENTIFIER.match(token.replace("_", "").replace("-", "")))
 
 
 def _shannon_entropy_bits_per_char(token: str) -> float:
@@ -92,6 +104,8 @@ class SecretScanner:
                 yield SafetyFinding(kind=rule.kind, location=f"offset:{match.start()}")
         for token_match in _HIGH_ENTROPY_TOKEN.finditer(text):
             token = token_match.group(0)
+            if _is_alphabetic_identifier(token):
+                continue  # descriptive identifier (e.g. an AWS role/policy name), never a secret
             if _shannon_entropy_bits_per_char(token) >= _HIGH_ENTROPY_BITS_PER_CHAR:
                 yield SafetyFinding(
                     kind="high-entropy-string", location=f"offset:{token_match.start()}"

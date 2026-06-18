@@ -56,3 +56,24 @@ def test_rate_limit_is_retryable() -> None:
     )
     with pytest.raises(RetryableError):
         _client().ground("q")
+
+
+@respx.mock
+def test_empty_api_key_omits_authorization_header() -> None:
+    # The public AWS Knowledge MCP endpoint needs no auth; an empty key must NOT produce
+    # an illegal `Bearer ` header value (it raises before the request otherwise).
+    route = respx.post(f"{BASE}/tools/documentation-search").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    client = McpGroundingClient(base_url=BASE, api_key="")
+    assert client.ground("q") == []
+    assert "Authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+def test_present_api_key_sends_bearer_header() -> None:
+    route = respx.post(f"{BASE}/tools/documentation-search").mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
+    McpGroundingClient(base_url=BASE, api_key="k").ground("q")
+    assert route.calls.last.request.headers["Authorization"] == "Bearer k"

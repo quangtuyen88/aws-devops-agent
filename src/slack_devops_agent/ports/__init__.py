@@ -36,8 +36,12 @@ class InferenceProvider(Protocol):
         """Identifier of the concrete backend (e.g. ``kiro``, ``bedrock``)."""
         ...
 
-    def run_inference(self, prompt_input: str) -> InferenceExchange:
-        """Run one inference round-trip. Raises a typed failure on backend error."""
+    def run_inference(self, prompt_input: str, system: str | None = None) -> InferenceExchange:
+        """Run one inference round-trip. Raises a typed failure on backend error.
+
+        ``system`` carries an operator guardrail prompt sent with higher precedence than
+        ``prompt_input`` (prompt-injection resistance).
+        """
         ...
 
 
@@ -50,7 +54,13 @@ class JobCoordinator(Protocol):
     """
 
     def register_or_get(
-        self, identity: tuple[str, str], ref: OriginatingMessageRef, job_id: UUID, now: datetime
+        self,
+        identity: tuple[str, str],
+        ref: OriginatingMessageRef,
+        job_id: UUID,
+        now: datetime,
+        attached_file_name: str | None = None,
+        attached_file_text: str | None = None,
     ) -> tuple[ProcessingJob, bool]:
         """Register a new job or return the existing one for ``identity`` (BR-010).
 
@@ -128,6 +138,10 @@ class SlackGateway(Protocol):
 
     def post_message(self, ref: OriginatingMessageRef, text: str) -> str:
         """Post a message in the originating thread; returns the posted message ts."""
+        ...
+
+    def download_file_text(self, download_url: str, max_bytes: int) -> str:
+        """Download a private Slack file as UTF-8 text, truncated to ``max_bytes``."""
         ...
 
 

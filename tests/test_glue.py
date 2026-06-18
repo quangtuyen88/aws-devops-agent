@@ -6,7 +6,9 @@ import json
 import logging
 from typing import Any
 
+import httpx
 import pytest
+import respx
 from slack_sdk.errors import SlackApiError
 
 from slack_devops_agent.components.intake.slack_gateway import SlackGatewayAdapter
@@ -31,6 +33,7 @@ class _FakeWebClient:
         self._replies = replies or {"messages": []}
         self._error = error
         self.posted: list[dict[str, Any]] = []
+        self.token = "xoxb-fake-token"  # noqa: S105  # test-only placeholder, not a real secret
 
     def conversations_replies(self, **kwargs: Any) -> _FakeResponse:
         if self._error is not None:
@@ -51,6 +54,27 @@ def test_slack_gateway_fetch_and_post() -> None:
     ref = OriginatingMessageRef(channel_id="C1", thread_ts="1.1", message_ts="1.1", author_id="U1")
     assert gw.post_message(ref, "answer") == "posted-ts-1"
     assert client.posted[0]["channel"] == "C1"
+
+
+@respx.mock
+def test_slack_gateway_download_file_text_sends_bearer_and_truncates() -> None:
+    url = "https://files.slack.com/private/explore-s3.yaml"
+    route = respx.get(url).mock(
+        return_value=httpx.Response(200, content=b"AWSTemplateFormatVersion: 2010-09-09\nmore")
+    )
+    gw = SlackGatewayAdapter(_FakeWebClient())  # type: ignore[arg-type]
+    text = gw.download_file_text(url, max_bytes=10)
+    assert text == "AWSTemplat"  # truncated to max_bytes
+    assert route.calls.last.request.headers["Authorization"] == "Bearer xoxb-fake-token"
+
+
+@respx.mock
+def test_slack_gateway_download_403_is_retryable() -> None:
+    url = "https://files.slack.com/private/x.yaml"
+    respx.get(url).mock(return_value=httpx.Response(403))
+    gw = SlackGatewayAdapter(_FakeWebClient())  # type: ignore[arg-type]
+    with pytest.raises(RetryableError):
+        gw.download_file_text(url, max_bytes=1000)
 
 
 def test_slack_gateway_maps_rate_limit_to_retryable() -> None:

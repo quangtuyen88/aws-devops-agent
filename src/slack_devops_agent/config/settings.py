@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     kiro_gateway_base_url: str = Field(default="", alias="KIRO_GATEWAY_BASE_URL")
     proxy_api_key: str = Field(default="", alias="PROXY_API_KEY")
     kiro_model: str = Field(default="claude-3-5-sonnet", alias="KIRO_MODEL")
+    kiro_timeout_seconds: float = Field(default=70.0, alias="KIRO_TIMEOUT_SECONDS")
     bedrock_region: str = Field(default="us-east-1", alias="BEDROCK_REGION")
     bedrock_model_id: str = Field(
         default="anthropic.claude-3-5-sonnet-20240620-v1:0", alias="BEDROCK_MODEL_ID"

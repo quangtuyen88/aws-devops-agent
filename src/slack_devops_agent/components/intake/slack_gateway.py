@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import httpx
 from slack_sdk.errors import SlackApiError
 
 from ...domain.entities import OriginatingMessageRef, ThreadMessage
@@ -41,6 +42,26 @@ class SlackGatewayAdapter:
                 )
             )
         return result
+
+    def download_file_text(self, download_url: str, max_bytes: int) -> str:
+        """Download a private Slack file as UTF-8 text (requires the `files:read` scope).
+
+        Authenticates with the bot token (held by the WebClient). Truncates at ``max_bytes`` as
+        a second guard on top of the intake size check. A 403 (missing scope) or transport error
+        is mapped so the caller degrades to a text-only review rather than failing the job.
+        """
+        token = getattr(self._client, "token", "") or ""
+        try:
+            response = httpx.get(
+                download_url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as err:
+            raise RetryableError(f"slack file download error: {err}") from err
+        return response.content[:max_bytes].decode("utf-8", errors="replace")
 
     def post_message(self, ref: OriginatingMessageRef, text: str) -> str:
         """Post a message into the originating thread; return the posted message ts."""

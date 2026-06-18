@@ -42,12 +42,17 @@ class KiroGatewayBackend:
     def backend_id(self) -> str:
         return _BACKEND_ID
 
-    def run_inference(self, prompt_input: str) -> InferenceExchange:
-        """POST one chat completion. Maps 429/5xx to retryable; others to typed failure."""
-        payload = {
-            "model": self._model,
-            "messages": [{"role": "user", "content": prompt_input}],
-        }
+    def run_inference(self, prompt_input: str, system: str | None = None) -> InferenceExchange:
+        """POST one chat completion. Maps 429/5xx to retryable; others to typed failure.
+
+        ``system`` is sent as a leading ``system`` message (outranks user content) so the
+        operator guardrail cannot be overridden by instructions inside ``prompt_input``.
+        """
+        messages: list[dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt_input})
+        payload = {"model": self._model, "messages": messages}
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",

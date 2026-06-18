@@ -78,3 +78,21 @@ variable "max_attempts" {
   type        = number
   description = "Max attempts (BR-022)."
 }
+
+variable "slack_signing_secret" {
+  type        = string
+  sensitive   = true
+  description = "Slack signing secret value (request signature verification)."
+}
+
+variable "slack_bot_token" {
+  type        = string
+  sensitive   = true
+  description = "Slack bot OAuth token value (posts the ack)."
+}
+
+variable "slack_bot_user_id" {
+  type        = string
+  default     = ""
+  description = "Slack bot user id (self-mention suppression)."
+}
