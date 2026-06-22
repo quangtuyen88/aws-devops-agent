@@ -97,9 +97,11 @@ class KiroGatewayBackend:
         if isinstance(usage_obj, dict):
             total = usage_obj.get("total_tokens")
             tokens = int(total) if isinstance(total, int) else 0
-        if output is None:
+        if output is None or not output.strip():
+            # Empty/whitespace content (e.g. a reasoning-only response, or an unknown model id)
+            # must never post a blank answer — route to the FR-17 failure path instead.
             raise InferenceFailureError(
-                "kiro-gateway response missing message content", backend_id=_BACKEND_ID
+                "kiro-gateway response had empty message content", backend_id=_BACKEND_ID
             )
         return InferenceExchange(
             prompt_input="",  # never echo the raw prompt back into the transient exchange log
