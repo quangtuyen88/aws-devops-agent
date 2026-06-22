@@ -67,9 +67,9 @@ class BedrockBackend:
                 output = text if isinstance(text, str) else None
         usage = response.get("usage", {})
         tokens = int(usage.get("totalTokens", 0)) if isinstance(usage, dict) else 0
-        if output is None:
+        if output is None or not output.strip():
             raise InferenceFailureError(
-                "bedrock response missing message content", backend_id=_BACKEND_ID
+                "bedrock response had empty message content", backend_id=_BACKEND_ID
             )
         return InferenceExchange(
             prompt_input="",

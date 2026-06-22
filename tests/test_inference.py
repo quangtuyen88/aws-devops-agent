@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -16,6 +17,8 @@ from slack_devops_agent.components.inference.provider import (
     InferenceFailureError,
     build_inference_provider,
 )
+from slack_devops_agent.components.inference.system_prompt import GUARDRAIL_SYSTEM_PROMPT
+from slack_devops_agent.components.worker.composer import DefaultAnswerComposer
 from slack_devops_agent.config.settings import Settings
 from slack_devops_agent.resilience.backoff import RetryableError
 
@@ -94,6 +97,21 @@ def test_kiro_missing_content_is_typed_failure() -> None:
         _kiro().run_inference("q")
 
 
+@respx.mock
+@pytest.mark.parametrize("content", ["", "   ", "\n\t "])
+def test_kiro_blank_content_is_typed_failure(content: str) -> None:
+    # A 200 with empty/whitespace content must NOT post a blank answer (never silence,
+    # never an empty Recommendation): it routes to the FR-17 dependency-failure path.
+    respx.post(f"{BASE}/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}], "usage": {"total_tokens": 1}},
+        )
+    )
+    with pytest.raises(InferenceFailureError):
+        _kiro().run_inference("q")
+
+
 class _StubBedrockClient:
     """Minimal stub of the boto3 bedrock-runtime client's converse method."""
 
@@ -146,6 +164,45 @@ def test_bedrock_other_error_is_typed_failure() -> None:
     backend = BedrockBackend(client=_StubBedrockClient(error=err), model_id="m")  # type: ignore[arg-type]
     with pytest.raises(InferenceFailureError):
         backend.run_inference("q")
+
+
+@pytest.mark.parametrize("text", ["", "   ", "\n "])
+def test_bedrock_blank_content_is_typed_failure(text: str) -> None:
+    client = _StubBedrockClient(
+        response={
+            "output": {"message": {"content": [{"text": text}]}},
+            "usage": {"totalTokens": 1},
+        }
+    )
+    backend = BedrockBackend(client=client, model_id="m")  # type: ignore[arg-type]
+    with pytest.raises(InferenceFailureError):
+        backend.run_inference("q")
+
+
+def test_guardrail_prompt_specifies_the_composer_output_contract() -> None:
+    # The composer parses labelled sections; the system prompt MUST ask the model to emit
+    # them, otherwise a prose answer collapses into one blob and rationale becomes the
+    # "See recommendation." placeholder (the screenshot defect).
+    prompt = GUARDRAIL_SYSTEM_PROMPT.lower()
+    assert "recommendation:" in prompt
+    assert "rationale:" in prompt
+
+
+def test_prompt_shaped_output_parses_into_distinct_sections() -> None:
+    # A response shaped per the guardrail prompt must yield a real rationale, not the
+    # placeholder, and split out trade-offs for a structured answer type.
+    model_output = (
+        "Recommendation: Use AWS SAM with `sam build` then `sam deploy --guided`.\n"
+        "Rationale: SAM packages the function and provisions the stack via CloudFormation.\n"
+        "Trade-offs: SAM abstracts CloudFormation but limits low-level control.\n"
+        "Alternative: Use the Serverless Framework for multi-cloud portability."
+    )
+    answer = DefaultAnswerComposer().compose(
+        uuid4(), "How do I deploy with AWS SAM?", model_output, []
+    )
+    assert answer.rationale.startswith("SAM packages the function")
+    assert answer.recommendation.startswith("Use AWS SAM")
+    assert answer.trade_offs is not None
 
 
 def test_factory_selects_backend_behind_the_seam() -> None:
