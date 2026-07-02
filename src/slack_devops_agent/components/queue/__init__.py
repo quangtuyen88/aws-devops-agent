@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .message import WorkMessage
 from .sqs import SqsWorkQueue
 
-__all__ = ["SqsWorkQueue"]
+__all__ = ["SqsWorkQueue", "WorkMessage"]

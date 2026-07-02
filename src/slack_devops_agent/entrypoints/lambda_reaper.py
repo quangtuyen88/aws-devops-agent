@@ -7,15 +7,15 @@ bot token (infra-spec §4).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import boto3
+from pydantic import ValidationError
 from slack_sdk import WebClient
 
 from ..components.intake import SlackGatewayAdapter
 from ..components.jobs import DynamoJobCoordinator
-from ..components.queue import SqsWorkQueue
+from ..components.queue import SqsWorkQueue, WorkMessage
 from ..components.recovery import Reaper
 from ..config.settings import Settings, get_settings
 from ..observability.logging import configure_logging, get_logger
@@ -51,9 +51,9 @@ def _drain_dlq(settings: Settings) -> list[tuple[str, str]]:
     response = sqs.receive_message(QueueUrl=settings.dlq_url, MaxNumberOfMessages=10)
     for message in response.get("Messages", []):
         try:
-            payload = json.loads(message.get("Body") or "{}")
-            identities.append((str(payload["channel_id"]), str(payload["message_ts"])))
-        except (KeyError, ValueError):
+            work_message = WorkMessage.from_json(message.get("Body") or "{}")
+            identities.append((work_message.channel_id, work_message.message_ts))
+        except (ValueError, ValidationError):
             _log.warning("skipping malformed DLQ message")
             continue
         sqs.delete_message(QueueUrl=settings.dlq_url, ReceiptHandle=message["ReceiptHandle"])
