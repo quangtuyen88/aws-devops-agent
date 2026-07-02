@@ -11,7 +11,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from .entities import (
-    Answer,
     ChannelAllowlist,
     FeedbackSignal,
     InboundMention,
@@ -21,7 +20,6 @@ from .entities import (
 from .enums import (
     AnswerType,
     EventAction,
-    FailureCause,
     JobStatus,
     NonAllowlistedBehaviour,
     ReactionKind,
@@ -55,7 +53,7 @@ def should_process_existing(job: ProcessingJob) -> bool:
     A redelivered/known identity is re-eligible only when not yet complete
     (status in {seen, in-progress}); terminal jobs do nothing further.
     """
-    return not job.status.is_complete
+    return not job.status.is_terminal
 
 
 def is_lease_stale(job: ProcessingJob, now: datetime, staleness_seconds: int) -> bool:
@@ -176,15 +174,6 @@ def classify_answer_type(text: str) -> AnswerType:
     return AnswerType.FACTUAL
 
 
-def validate_answer(answer: Answer) -> None:
-    """BR-015/BR-016 — re-assert structural invariants (the model also enforces them).
-
-    Raises ``ValueError`` on an inconsistent answer; constructing :class:`Answer`
-    already validates, so this is a defensive re-check at the composition boundary.
-    """
-    Answer.model_validate(answer.model_dump())
-
-
 # --- Feedback aggregation (CMP-007) — Q4/F-1 ------------------------------
 
 
@@ -220,11 +209,3 @@ def aggregate_feedback(rows: list[FeedbackSignal]) -> dict[ReactionKind, int]:
         if net is not None:
             tally[net] += 1
     return tally
-
-
-# --- Failure cause mapping (CMP-002) — FR-17/NFR-20 -----------------------
-
-
-def terminal_status_for_failure(_cause: FailureCause) -> JobStatus:
-    """BR-013/BR-022 — every terminal processing error resolves the job ``failed``."""
-    return JobStatus.FAILED

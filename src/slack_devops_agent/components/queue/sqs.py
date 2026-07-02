@@ -8,9 +8,10 @@ correlation-id is propagated as a message attribute for end-to-end tracing (NFR-
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 from uuid import UUID
+
+from .message import WorkMessage
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs.client import SQSClient
@@ -27,18 +28,16 @@ class SqsWorkQueue:
         self, job_id: UUID, identity: tuple[str, str], correlation_id: UUID, author_id: str
     ) -> None:
         """Enqueue a job reference for async processing (BR-004)."""
-        body = json.dumps(
-            {
-                "job_id": str(job_id),
-                "channel_id": identity[0],
-                "message_ts": identity[1],
-                "correlation_id": str(correlation_id),
-                "author_id": author_id,
-            }
+        message = WorkMessage(
+            job_id=job_id,
+            channel_id=identity[0],
+            message_ts=identity[1],
+            correlation_id=correlation_id,
+            author_id=author_id,
         )
         self._client.send_message(
             QueueUrl=self._queue_url,
-            MessageBody=body,
+            MessageBody=message.to_json(),
             MessageAttributes={
                 "correlation_id": {
                     "DataType": "String",

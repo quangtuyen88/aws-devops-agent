@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     request_time_budget_seconds: float = Field(default=30.0, alias="REQUEST_TIME_BUDGET_SECONDS")
     lease_staleness_seconds: int = Field(default=90, alias="LEASE_STALENESS_SECONDS")
     max_attempts: int = Field(default=3, alias="MAX_ATTEMPTS")
-    heartbeat_seconds: int = Field(default=15, alias="HEARTBEAT_SECONDS")
+    heartbeat_seconds: int = Field(default=45, alias="HEARTBEAT_SECONDS")
 
     # --- Cost guardrail / input bounds (NFR-8/12/13/14) ---
     max_inference_calls: int = Field(default=2, alias="MAX_INFERENCE_CALLS")
@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 
     # --- Resilience (NFR-15/16) ---
     retry_base_ms: int = Field(default=500, alias="RETRY_BASE_MS")
-    retry_max_attempts: int = Field(default=3, alias="RETRY_MAX_ATTEMPTS")
+    retry_max_attempts: int = Field(default=2, alias="RETRY_MAX_ATTEMPTS")
     retry_cap_ms: int = Field(default=8000, alias="RETRY_CAP_MS")
     breaker_failure_threshold: int = Field(default=5, alias="BREAKER_FAILURE_THRESHOLD")
     breaker_reset_seconds: int = Field(default=30, alias="BREAKER_RESET_SECONDS")

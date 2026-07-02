@@ -61,27 +61,27 @@ variable "lambda_runtime" {
 # --- Timing invariant (infra-spec §2.4 — MUST move in lock-step) ---
 
 variable "request_time_budget_seconds" {
-  description = "App soft per-request budget (NFR-17)."
+  description = "App soft per-request budget (NFR-17). Sized above the kiro gateway HTTP timeout so the gateway call fails first."
   type        = number
-  default     = 30
+  default     = 75
 }
 
 variable "worker_lambda_timeout_seconds" {
   description = "Worker Lambda hard timeout (>= budget; infra-spec §2.4)."
   type        = number
-  default     = 45
+  default     = 85
 }
 
 variable "queue_visibility_timeout_seconds" {
   description = "SQS visibility timeout (== lease staleness; infra-spec §2.4)."
   type        = number
-  default     = 90
+  default     = 120
 }
 
 variable "lease_staleness_seconds" {
   description = "Lease staleness bound (NFR-19, inclusive >= reclaim)."
   type        = number
-  default     = 90
+  default     = 120
 }
 
 variable "max_receive_count" {
@@ -91,9 +91,9 @@ variable "max_receive_count" {
 }
 
 variable "heartbeat_seconds" {
-  description = "Heartbeat cadence (NFR-11)."
+  description = "Heartbeat cadence (NFR-11) — interval between in-thread \"still working…\" posts. Higher = fewer progress messages."
   type        = number
-  default     = 15
+  default     = 45
 }
 
 # --- Scaling (infra-spec §2.2) ---
@@ -125,15 +125,27 @@ variable "gateway_image" {
 }
 
 variable "gateway_desired_count" {
-  description = "kiro-gateway Fargate baseline task count (Multi-AZ baseline, F4)."
+  description = "kiro-gateway Fargate baseline task count. 1 = single task (no Multi-AZ HA); raise to 2 to restore the F4 Multi-AZ baseline."
   type        = number
-  default     = 2
+  default     = 1
 }
 
 variable "gateway_autoscale_min_capacity" {
-  description = "kiro-gateway Application Auto Scaling minimum task count (infra-spec §2.3 baseline, F4)."
+  description = "kiro-gateway Application Auto Scaling minimum task count. Keep == gateway_desired_count (1 for single-task, 2 for the F4 Multi-AZ baseline)."
   type        = number
-  default     = 2
+  default     = 1
+}
+
+variable "gateway_tls_enabled" {
+  description = "Serve the internal kiro-gateway ALB over 443/TLS (needs gateway_certificate_arn). False = plaintext 80/HTTP on the internal private-subnet hop (no ACM cert). NFR-5: prefer true once a valid cert exists."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_alb_idle_timeout_seconds" {
+  description = "kiro-gateway ALB idle timeout. Keep >= kiro_timeout_seconds (else the ALB 504s a slow inference first). Raise this with the rest of the timeout chain for longer generations."
+  type        = number
+  default     = 80
 }
 
 variable "gateway_autoscale_max_capacity" {
@@ -170,10 +182,22 @@ variable "inference_backend" {
   default     = "kiro"
 }
 
-variable "mcp_base_url" {
-  description = "AWS Knowledge MCP server base URL."
+variable "kiro_model" {
+  description = "Model id sent to the kiro gateway (KIRO_MODEL on the worker)."
   type        = string
-  default     = ""
+  default     = "claude-sonnet-4.6"
+}
+
+variable "kiro_timeout_seconds" {
+  description = "kiro gateway HTTP client timeout in seconds (KIRO_TIMEOUT_SECONDS on the worker). Keep below request_time_budget_seconds."
+  type        = number
+  default     = 70
+}
+
+variable "mcp_base_url" {
+  description = "AWS Knowledge MCP server base URL. Default is the public unauthenticated endpoint; blank disables MCP grounding."
+  type        = string
+  default     = "https://knowledge-mcp.global.api.aws"
 }
 
 variable "slack_bot_user_id" {

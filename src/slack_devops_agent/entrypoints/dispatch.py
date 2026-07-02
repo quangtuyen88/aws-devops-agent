@@ -6,11 +6,11 @@ unit-testable with synthetic events and fakes.
 
 from __future__ import annotations
 
-import json
 from uuid import UUID
 
 from ..components.intake import IntakeHandler, IntakeOutcome, parse_mention, parse_reaction
 from ..components.intake.parsing import pick_reviewable_file
+from ..components.queue import WorkMessage
 
 _MENTION_EVENT_TYPES = {"app_mention", "message"}
 _REACTION_EVENT_TYPES = {"reaction_added", "reaction_removed"}
@@ -42,14 +42,6 @@ def dispatch_slack_event(
 
 
 def parse_sqs_record(body: str) -> tuple[tuple[str, str], UUID, str]:
-    """Parse an SQS body into ``(identity, correlation_id, author_id)`` for the worker.
-
-    ``author_id`` (ENT-001.author-id) feeds AdoptionMetric (FR-18/BR-019). A missing field
-    falls back to ``""`` rather than crashing the whole batch; the adoption write tolerates
-    it and the gap is observable via the empty developer id.
-    """
-    payload = json.loads(body)
-    identity = (str(payload["channel_id"]), str(payload["message_ts"]))
-    correlation_id = UUID(str(payload["correlation_id"]))
-    author_id = str(payload.get("author_id") or "")
-    return identity, correlation_id, author_id
+    """Parse an SQS body into ``(identity, correlation_id, author_id)`` for the worker."""
+    message = WorkMessage.from_json(body)
+    return (message.channel_id, message.message_ts), message.correlation_id, message.author_id

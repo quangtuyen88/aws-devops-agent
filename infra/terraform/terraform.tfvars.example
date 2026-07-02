@@ -20,10 +20,13 @@ gateway_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/REPLAC
 inference_backend = "kiro"
 mcp_base_url      = "https://knowledge-mcp.global.api.aws"
 
-# Scope Bedrock (alternate backend) to specific model ARNs — no wildcards (least-privilege).
-bedrock_model_arns = [
-  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
-]
+# Bedrock alternate backend is OPT-IN. Left empty so a fresh deploy grants the worker NO
+# bedrock:InvokeModel IAM — the agent never reaches Bedrock unless you both set
+# inference_backend = "bedrock" AND list specific model ARNs here (no wildcards, least-privilege):
+#   bedrock_model_arns = [
+#     "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20240620-v1:0",
+#   ]
+bedrock_model_arns = []
 
 # --- Existing-network / existing-ALB (destroy-safe) mode ---
 # When use_existing_network = true the stack consumes the VPC/subnets/SG below via DATA

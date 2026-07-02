@@ -304,3 +304,43 @@ def test_happy_path_stamps_post_intent_before_resolving_br027() -> None:
     worker, _ = _worker(jobs=jobs, clock=clock)
     assert worker.process(IDENTITY, uuid4(), "U1") == WorkerOutcome.RESOLVED
     assert jobs.get(IDENTITY).attempt_count == 2  # type: ignore[union-attr]
+
+
+def test_breaker_opens_after_threshold_and_fails_fast_without_calling_dependency() -> None:
+    """A shared breaker per dependency (not one per call) actually trips (NFR-16)."""
+    jobs = FakeJobCoordinator()
+    clock = FakeClock()
+    identities = [("C1", "111.1"), ("C2", "111.1"), ("C3", "111.1")]
+    for cid, ts in identities:
+        ref = OriginatingMessageRef(channel_id=cid, thread_ts=None, message_ts=ts, author_id="U1")
+        jobs.register_or_get((cid, ts), ref, uuid4(), clock.now())
+
+    grounding = FakeGrounding(raises=True)
+    worker, _ = _worker(
+        jobs=jobs,
+        clock=clock,
+        grounding=grounding,
+        config=WorkerConfig(breaker_failure_threshold=2, retry_max_attempts=0),
+    )
+    for identity in identities[:2]:
+        assert worker.process(identity, uuid4(), "U1") == WorkerOutcome.FAILED
+    assert grounding.calls == 2
+
+    # breaker is now open: the third job must fail fast without calling the dependency again
+    assert worker.process(identities[2], uuid4(), "U1") == WorkerOutcome.FAILED
+    assert grounding.calls == 2
+
+
+def test_retry_max_attempts_config_bounds_dependency_calls() -> None:
+    jobs = FakeJobCoordinator()
+    clock = FakeClock()
+    _seed_job(jobs, clock)
+    grounding = FakeGrounding(raises=True)
+    worker, _ = _worker(
+        jobs=jobs,
+        clock=clock,
+        grounding=grounding,
+        config=WorkerConfig(retry_max_attempts=0, breaker_failure_threshold=100),
+    )
+    assert worker.process(IDENTITY, uuid4(), "U1") == WorkerOutcome.FAILED
+    assert grounding.calls == 1

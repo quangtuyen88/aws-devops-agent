@@ -108,6 +108,16 @@ variable "inference_backend" {
   description = "Selected inference backend (kiro|bedrock)."
 }
 
+variable "kiro_model" {
+  type        = string
+  description = "Model id sent to the kiro gateway (KIRO_MODEL)."
+}
+
+variable "kiro_timeout_seconds" {
+  type        = number
+  description = "kiro gateway HTTP client timeout in seconds (KIRO_TIMEOUT_SECONDS)."
+}
+
 variable "mcp_base_url" {
   type        = string
   description = "AWS Knowledge MCP base URL."

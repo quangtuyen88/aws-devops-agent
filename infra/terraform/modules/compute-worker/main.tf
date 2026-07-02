@@ -1,7 +1,7 @@
 # compute-worker — horizontally-scalable worker role (infra-spec §2.2). SQS → Lambda event
 # source, batch_size=1 (no head-of-line blocking, NFR-10), reserved concurrency 15, event
 # source max concurrency 12. In VPC (private subnets) for private reach to kiro-gateway.
-# Timeout 45s sits above the 30s NFR-17 soft budget so the app fails gracefully first.
+# The Lambda timeout sits above the NFR-17 soft budget so the app fails gracefully first.
 
 terraform {
   required_providers {
@@ -36,6 +36,8 @@ resource "aws_lambda_function" "worker" {
       ANSWER_TS_GSI               = var.answer_ts_index
       INFERENCE_BACKEND           = var.inference_backend
       KIRO_GATEWAY_BASE_URL       = var.gateway_base_url
+      KIRO_MODEL                  = var.kiro_model
+      KIRO_TIMEOUT_SECONDS        = tostring(var.kiro_timeout_seconds)
       MCP_BASE_URL                = var.mcp_base_url
       REQUEST_TIME_BUDGET_SECONDS = tostring(var.request_budget_seconds)
       LEASE_STALENESS_SECONDS     = tostring(var.lease_staleness_seconds)

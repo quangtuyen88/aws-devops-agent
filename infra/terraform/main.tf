@@ -122,23 +122,25 @@ module "observability" {
 module "gateway" {
   source = "./modules/gateway"
 
-  name_prefix            = var.name_prefix
-  tags                   = local.common_tags
-  vpc_id                 = module.networking.vpc_id
-  private_subnet_ids     = module.networking.private_subnet_ids
-  worker_sg_id           = module.networking.worker_sg_id
-  image                  = var.gateway_image
-  desired_count          = var.gateway_desired_count
-  autoscale_min_capacity = var.gateway_autoscale_min_capacity
-  autoscale_max_capacity = var.gateway_autoscale_max_capacity
-  autoscale_cpu_target   = var.gateway_autoscale_cpu_target
-  certificate_arn        = var.gateway_certificate_arn
-  task_role_arn          = module.security.gateway_task_role_arn
-  execution_role_arn     = module.security.gateway_execution_role_arn
-  proxy_key_secret       = module.security.secret_arns["kiro_proxy_key"]
-  sso_secret             = module.security.secret_arns["kiro_sso"]
-  log_retention_days     = var.log_retention_days
-  kms_key_arn            = module.security.kms_key_arn
+  name_prefix              = var.name_prefix
+  tags                     = local.common_tags
+  vpc_id                   = module.networking.vpc_id
+  private_subnet_ids       = module.networking.private_subnet_ids
+  worker_sg_id             = module.networking.worker_sg_id
+  image                    = var.gateway_image
+  desired_count            = var.gateway_desired_count
+  autoscale_min_capacity   = var.gateway_autoscale_min_capacity
+  autoscale_max_capacity   = var.gateway_autoscale_max_capacity
+  autoscale_cpu_target     = var.gateway_autoscale_cpu_target
+  certificate_arn          = var.gateway_certificate_arn
+  tls_enabled              = var.gateway_tls_enabled
+  alb_idle_timeout_seconds = var.gateway_alb_idle_timeout_seconds
+  task_role_arn            = module.security.gateway_task_role_arn
+  execution_role_arn       = module.security.gateway_execution_role_arn
+  proxy_key_secret         = module.security.secret_arns["kiro_proxy_key"]
+  sso_secret               = module.security.secret_arns["kiro_sso"]
+  log_retention_days       = var.log_retention_days
+  kms_key_arn              = module.security.kms_key_arn
 
   # Existing-ALB (destroy-safe) mode — add a listener rule to a borrowed ALB instead of one.
   use_existing_alb          = var.existing_alb
@@ -188,8 +190,10 @@ module "compute_worker" {
   table_operational            = local.table_operational
   table_config                 = local.table_config
   answer_ts_index              = local.answer_ts_index
-  gateway_base_url             = "https://${module.gateway.alb_dns_name}"
+  gateway_base_url             = "${var.gateway_tls_enabled ? "https" : "http"}://${module.gateway.alb_dns_name}"
   inference_backend            = var.inference_backend
+  kiro_model                   = var.kiro_model
+  kiro_timeout_seconds         = var.kiro_timeout_seconds
   mcp_base_url                 = var.mcp_base_url
   request_budget_seconds       = var.request_time_budget_seconds
   lease_staleness_seconds      = var.lease_staleness_seconds

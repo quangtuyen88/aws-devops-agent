@@ -23,11 +23,10 @@ from uuid import UUID
 
 from ...domain import rules
 from ...domain.entities import GroundingSource, OriginatingMessageRef, ProcessingJob, ThreadMessage
-from ...domain.enums import FailureCause, JobStatus, SafetyAction
+from ...domain.enums import FailureCause, JobStatus
 from ...observability.logging import get_logger
 from ...observability.metrics import Metrics
 from ...ports import (
-    AnswerComposer,
     ConfigStore,
     GroundingClient,
     InferenceProvider,
@@ -42,6 +41,8 @@ from ...resilience.clock import Clock
 from ...resilience.time_budget import TimeBudget, TimeBudgetExceededError
 from ..inference.provider import InferenceFailureError
 from ..inference.system_prompt import GUARDRAIL_SYSTEM_PROMPT
+from ..jobs import ClaimDecision, claim_and_guard
+from .composer import DefaultAnswerComposer
 from .heartbeat import HeartbeatEmitter
 from .rendering import render_answer, render_failure
 
@@ -80,7 +81,12 @@ class WorkerConfig:
     max_inference_calls: int = 2
     max_mcp_calls: int = 5
     max_input_tokens: int = 12000
-    heartbeat_seconds: float = 15.0
+    heartbeat_seconds: float = 45.0
+    retry_base_ms: int = 500
+    retry_max_attempts: int = 2
+    retry_cap_ms: int = 8000
+    breaker_failure_threshold: int = 5
+    breaker_reset_seconds: float = 30.0
 
 
 # A factory builds the heartbeat context manager for a given thread (injectable for tests).
@@ -107,13 +113,21 @@ class Worker:
     grounding: GroundingClient
     opdata: OperationalDataService
     config_store: ConfigStore
-    composer: AnswerComposer
+    composer: DefaultAnswerComposer
     clock: Clock
     metrics: Metrics
     config: WorkerConfig = field(default_factory=WorkerConfig)
     # Optional override for the NFR-11 heartbeat (tests inject a fake; production uses the
     # default thread-based :class:`HeartbeatEmitter`).
     heartbeat_factory: HeartbeatFactory | None = None
+    _breakers: dict[str, CircuitBreaker] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._backoff_policy = BackoffPolicy(
+            base_ms=self.config.retry_base_ms,
+            max_attempts=self.config.retry_max_attempts,
+            cap_ms=self.config.retry_cap_ms,
+        )
 
     def process(
         self, identity: tuple[str, str], correlation_id: UUID, author_id: str
@@ -125,27 +139,26 @@ class Worker:
         """
         log = get_logger(__name__, str(correlation_id))
 
-        existing = self.jobs.get(identity)
-        if existing is not None and existing.status.is_complete:  # BR-011
+        # ADR-0001: claim_and_guard is the single at-most-once-completed gate — completion
+        # short-circuit, single-winner lease, repost-after-intent refusal, and the attempt
+        # bound all live there (see docs/adr/0001-claim-and-guard.md).
+        claim = claim_and_guard(
+            self.jobs,
+            identity,
+            self.clock.now(),
+            staleness_seconds=self.config.lease_staleness_seconds,
+            max_attempts=self.config.max_attempts,
+        )
+        if claim.decision == ClaimDecision.SKIP_COMPLETED:
             return self._record(WorkerOutcome.SKIPPED_COMPLETE)
-
-        job = self.jobs.acquire_lease(
-            identity, self.clock.now(), self.config.lease_staleness_seconds
-        )  # BR-021/BR-027 single-winner
-        if job is None:
+        if claim.decision == ClaimDecision.LEASE_LOST:
             return self._record(WorkerOutcome.LEASE_LOST)
-
-        # BR-027 idempotent post: if a prior attempt already posted an answer (ts stamped) OR
-        # had stamped the pre-post intent marker (a post may already have reached Slack but the
-        # ts stamp was lost to a crash), do NOT repost — just resolve. This closes the
-        # repost window (MINOR-b): a recovery-spawned reclaim can never produce a duplicate
-        # in-thread answer.
-        if job.post_attempted:
+        if claim.decision == ClaimDecision.SKIP_ALREADY_POSTED:
             self.jobs.transition(identity, JobStatus.RESOLVED, self.clock.now())
             return self._record(WorkerOutcome.RESOLVED)
-
-        # BR-022: bounded retries — a job past the attempt limit is abandoned to failed.
-        if rules.attempts_exhausted(job, self.config.max_attempts):
+        job = claim.job
+        assert job is not None  # PROCEED and EXHAUSTED always carry the claimed job
+        if claim.decision == ClaimDecision.EXHAUSTED:
             self._fail(identity, job, FailureCause.EXHAUSTED_RETRIES)
             return self._record(WorkerOutcome.FAILED)
 
@@ -208,9 +221,9 @@ class Worker:
 
         # Step 5 — safety gate FIRST (CS-4 / BR-012).
         verdict = self.safety.scan(assembled)
-        if verdict.recommended_action == SafetyAction.REFUSE:
+        if rules.safety_blocks_forward(verdict):
             raise _ProcessingError(FailureCause.SAFETY_REFUSE, [f.kind for f in verdict.findings])
-        if verdict.recommended_action == SafetyAction.WARN:
+        if rules.safety_requires_warning(verdict):
             self.slack.post_message(ref, "Heads up: your message may contain sensitive content.")
 
         # Step 6 — within-budget (BR-008).
@@ -262,10 +275,19 @@ class Worker:
     def _guarded[T](self, dep: str, op: Callable[[], T], budget: TimeBudget) -> T:
         """Run an external call under retry + breaker, mapping failures to FR-17 causes."""
         budget.check()
-        breaker = CircuitBreaker(dep, self.clock, failure_threshold=5, reset_seconds=30)
-        policy = BackoffPolicy(max_attempts=2)
+        breaker = self._breakers.setdefault(
+            dep,
+            CircuitBreaker(
+                dep,
+                self.clock,
+                failure_threshold=self.config.breaker_failure_threshold,
+                reset_seconds=self.config.breaker_reset_seconds,
+            ),
+        )
         try:
-            return breaker.call(lambda: retry_call(op, policy=policy, clock=self.clock))
+            return breaker.call(
+                lambda: retry_call(op, policy=self._backoff_policy, clock=self.clock)
+            )
         except (CircuitOpenError, RetryableError, InferenceFailureError) as err:
             raise _ProcessingError(FailureCause.DEPENDENCY) from err
 
