@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 
     # --- Resilience (NFR-15/16) ---
     retry_base_ms: int = Field(default=500, alias="RETRY_BASE_MS")
-    retry_max_attempts: int = Field(default=3, alias="RETRY_MAX_ATTEMPTS")
+    retry_max_attempts: int = Field(default=2, alias="RETRY_MAX_ATTEMPTS")
     retry_cap_ms: int = Field(default=8000, alias="RETRY_CAP_MS")
     breaker_failure_threshold: int = Field(default=5, alias="BREAKER_FAILURE_THRESHOLD")
     breaker_reset_seconds: int = Field(default=30, alias="BREAKER_RESET_SECONDS")

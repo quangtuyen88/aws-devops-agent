@@ -25,6 +25,7 @@ from slack_devops_agent.domain.entities import (
 from slack_devops_agent.domain.enums import JobStatus, NonAllowlistedBehaviour, SafetyAction
 from slack_devops_agent.domain.rules import is_lease_stale
 from slack_devops_agent.domain.state_machine import assert_transition
+from slack_devops_agent.resilience.backoff import RetryableError
 
 
 class FakeConfigStore:
@@ -203,12 +204,15 @@ class FakeInference:
 
 
 class FakeGrounding:
-    def __init__(self, sources: list[GroundingSource] | None = None) -> None:
+    def __init__(self, sources: list[GroundingSource] | None = None, raises: bool = False) -> None:
         self._sources = sources or []
+        self._raises = raises
         self.calls = 0
 
     def ground(self, query: str) -> list[GroundingSource]:
         self.calls += 1
+        if self._raises:
+            raise RetryableError("mcp down")
         return self._sources
 
 

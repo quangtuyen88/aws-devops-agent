@@ -81,6 +81,11 @@ class WorkerConfig:
     max_mcp_calls: int = 5
     max_input_tokens: int = 12000
     heartbeat_seconds: float = 15.0
+    retry_base_ms: int = 500
+    retry_max_attempts: int = 2
+    retry_cap_ms: int = 8000
+    breaker_failure_threshold: int = 5
+    breaker_reset_seconds: float = 30.0
 
 
 # A factory builds the heartbeat context manager for a given thread (injectable for tests).
@@ -114,6 +119,14 @@ class Worker:
     # Optional override for the NFR-11 heartbeat (tests inject a fake; production uses the
     # default thread-based :class:`HeartbeatEmitter`).
     heartbeat_factory: HeartbeatFactory | None = None
+    _breakers: dict[str, CircuitBreaker] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._backoff_policy = BackoffPolicy(
+            base_ms=self.config.retry_base_ms,
+            max_attempts=self.config.retry_max_attempts,
+            cap_ms=self.config.retry_cap_ms,
+        )
 
     def process(
         self, identity: tuple[str, str], correlation_id: UUID, author_id: str
@@ -262,10 +275,19 @@ class Worker:
     def _guarded[T](self, dep: str, op: Callable[[], T], budget: TimeBudget) -> T:
         """Run an external call under retry + breaker, mapping failures to FR-17 causes."""
         budget.check()
-        breaker = CircuitBreaker(dep, self.clock, failure_threshold=5, reset_seconds=30)
-        policy = BackoffPolicy(max_attempts=2)
+        breaker = self._breakers.setdefault(
+            dep,
+            CircuitBreaker(
+                dep,
+                self.clock,
+                failure_threshold=self.config.breaker_failure_threshold,
+                reset_seconds=self.config.breaker_reset_seconds,
+            ),
+        )
         try:
-            return breaker.call(lambda: retry_call(op, policy=policy, clock=self.clock))
+            return breaker.call(
+                lambda: retry_call(op, policy=self._backoff_policy, clock=self.clock)
+            )
         except (CircuitOpenError, RetryableError, InferenceFailureError) as err:
             raise _ProcessingError(FailureCause.DEPENDENCY) from err
 

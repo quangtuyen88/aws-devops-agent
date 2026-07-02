@@ -81,5 +81,10 @@ def build_worker(settings: Settings, *, correlation_id: str | None = None) -> Wo
             max_mcp_calls=settings.max_mcp_calls,
             max_input_tokens=settings.max_input_tokens,
             heartbeat_seconds=settings.heartbeat_seconds,
+            retry_base_ms=settings.retry_base_ms,
+            retry_max_attempts=settings.retry_max_attempts,
+            retry_cap_ms=settings.retry_cap_ms,
+            breaker_failure_threshold=settings.breaker_failure_threshold,
+            breaker_reset_seconds=settings.breaker_reset_seconds,
         ),
     )
