@@ -27,7 +27,6 @@ from ...domain.enums import FailureCause, JobStatus
 from ...observability.logging import get_logger
 from ...observability.metrics import Metrics
 from ...ports import (
-    AnswerComposer,
     ConfigStore,
     GroundingClient,
     InferenceProvider,
@@ -42,6 +41,7 @@ from ...resilience.clock import Clock
 from ...resilience.time_budget import TimeBudget, TimeBudgetExceededError
 from ..inference.provider import InferenceFailureError
 from ..inference.system_prompt import GUARDRAIL_SYSTEM_PROMPT
+from .composer import DefaultAnswerComposer
 from .heartbeat import HeartbeatEmitter
 from .rendering import render_answer, render_failure
 
@@ -112,7 +112,7 @@ class Worker:
     grounding: GroundingClient
     opdata: OperationalDataService
     config_store: ConfigStore
-    composer: AnswerComposer
+    composer: DefaultAnswerComposer
     clock: Clock
     metrics: Metrics
     config: WorkerConfig = field(default_factory=WorkerConfig)

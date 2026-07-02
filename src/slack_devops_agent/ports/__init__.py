@@ -13,7 +13,6 @@ from typing import Protocol
 from uuid import UUID
 
 from ..domain.entities import (
-    Answer,
     ChannelAllowlist,
     FeedbackSignal,
     GroundingSource,
@@ -192,18 +191,4 @@ class WorkQueue(Protocol):
         ``author_id`` (ENT-001.author-id) rides the message so the worker can attribute the
         resolved question to a distinct developer for AdoptionMetric (FR-18/BR-019).
         """
-        ...
-
-
-class AnswerComposer(Protocol):
-    """Composes the final Answer from inference output + grounding (CMP-002 helper)."""
-
-    def compose(
-        self,
-        correlation_id: UUID,
-        question: str,
-        model_output: str,
-        sources: list[GroundingSource],
-    ) -> Answer:
-        """Build a validated :class:`Answer` (BR-015/BR-016/BR-017)."""
         ...

@@ -26,7 +26,7 @@ _UNGROUNDED_MARKER = "_Note: this answer is not grounded in a cited AWS source._
 
 
 class DefaultAnswerComposer:
-    """Heuristic composer implementing the :class:`AnswerComposer` port."""
+    """Heuristic answer composer — the Worker's sole compose-step collaborator (CMP-002)."""
 
     def compose(
         self,
