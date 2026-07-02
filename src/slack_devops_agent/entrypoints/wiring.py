@@ -27,10 +27,12 @@ from ..observability.metrics import Metrics
 from ..resilience.clock import SystemClock
 
 if TYPE_CHECKING:
-    from boto3.resources.base import ServiceResource
+    from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
 
 
-def _shared(settings: Settings) -> tuple[ServiceResource, DynamoJobCoordinator, SlackGatewayAdapter, SystemClock]:
+def _shared(
+    settings: Settings,
+) -> tuple[DynamoDBServiceResource, DynamoJobCoordinator, SlackGatewayAdapter, SystemClock]:
     """Build the dynamo resource, job coordinator, Slack gateway, and clock every builder needs."""
     dynamo = boto3.resource("dynamodb", region_name=settings.aws_region)
     jobs = DynamoJobCoordinator(dynamo.Table(settings.processing_job_table), settings.answer_ts_gsi)
