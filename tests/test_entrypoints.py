@@ -130,6 +130,23 @@ def test_reaper_abandons_exhausted_stale_job() -> None:
     assert slack.posts  # FR-17 message posted
 
 
+def test_build_reaper_wires_from_settings() -> None:
+    from slack_devops_agent.components.recovery import Reaper
+    from slack_devops_agent.config.settings import Settings
+    from slack_devops_agent.entrypoints import wiring
+
+    settings = Settings(
+        AWS_REGION="us-east-1",
+        LEASE_STALENESS_SECONDS=42,
+        MAX_ATTEMPTS=7,
+        WORK_QUEUE_URL="https://sqs.example/q",
+    )
+    reaper = wiring.build_reaper(settings)
+    assert isinstance(reaper, Reaper)
+    assert reaper.staleness_seconds == 42
+    assert reaper.max_attempts == 7
+
+
 def test_reaper_drains_dead_letters() -> None:
     jobs = FakeJobCoordinator()
     clock = FakeClock()

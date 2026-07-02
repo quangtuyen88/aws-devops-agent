@@ -11,35 +11,14 @@ from typing import Any
 
 import boto3
 from pydantic import ValidationError
-from slack_sdk import WebClient
 
-from ..components.intake import SlackGatewayAdapter
-from ..components.jobs import DynamoJobCoordinator
-from ..components.queue import SqsWorkQueue, WorkMessage
-from ..components.recovery import Reaper
+from ..components.queue import WorkMessage
 from ..config.settings import Settings, get_settings
 from ..observability.logging import configure_logging, get_logger
-from ..observability.metrics import Metrics
-from ..resilience.clock import SystemClock
+from . import wiring
 
 configure_logging()
 _log = get_logger(__name__)
-
-
-def _build_reaper(settings: Settings) -> Reaper:
-    dynamo = boto3.resource("dynamodb", region_name=settings.aws_region)
-    sqs = boto3.client("sqs", region_name=settings.aws_region)
-    return Reaper(
-        jobs=DynamoJobCoordinator(
-            dynamo.Table(settings.processing_job_table), settings.answer_ts_gsi
-        ),
-        slack=SlackGatewayAdapter(WebClient(token=settings.slack_bot_token)),
-        queue=SqsWorkQueue(sqs, settings.work_queue_url),
-        clock=SystemClock(),
-        metrics=Metrics(),
-        staleness_seconds=settings.lease_staleness_seconds,
-        max_attempts=settings.max_attempts,
-    )
 
 
 def _drain_dlq(settings: Settings) -> list[tuple[str, str]]:
@@ -63,7 +42,7 @@ def _drain_dlq(settings: Settings) -> list[tuple[str, str]]:
 def lambda_handler(_event: dict[str, Any], _context: object = None) -> dict[str, Any]:
     """EventBridge entrypoint. Runs stale-lease recovery and DLQ drain."""
     settings = get_settings()
-    reaper = _build_reaper(settings)
+    reaper = wiring.build_reaper(settings)
     recovered = reaper.recover_stale()
     drained = reaper.drain_dead_letters(_drain_dlq(settings))
     _log.info("reaper run complete", extra={"recovered": len(recovered), "drained": len(drained)})
