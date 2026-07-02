@@ -41,6 +41,7 @@ from ...resilience.clock import Clock
 from ...resilience.time_budget import TimeBudget, TimeBudgetExceededError
 from ..inference.provider import InferenceFailureError
 from ..inference.system_prompt import GUARDRAIL_SYSTEM_PROMPT
+from ..jobs import ClaimDecision, claim_and_guard
 from .composer import DefaultAnswerComposer
 from .heartbeat import HeartbeatEmitter
 from .rendering import render_answer, render_failure
@@ -138,27 +139,26 @@ class Worker:
         """
         log = get_logger(__name__, str(correlation_id))
 
-        existing = self.jobs.get(identity)
-        if existing is not None and not rules.should_process_existing(existing):  # BR-011
+        # ADR-0001: claim_and_guard is the single at-most-once-completed gate — completion
+        # short-circuit, single-winner lease, repost-after-intent refusal, and the attempt
+        # bound all live there (see docs/adr/0001-claim-and-guard.md).
+        claim = claim_and_guard(
+            self.jobs,
+            identity,
+            self.clock.now(),
+            staleness_seconds=self.config.lease_staleness_seconds,
+            max_attempts=self.config.max_attempts,
+        )
+        if claim.decision == ClaimDecision.SKIP_COMPLETED:
             return self._record(WorkerOutcome.SKIPPED_COMPLETE)
-
-        job = self.jobs.acquire_lease(
-            identity, self.clock.now(), self.config.lease_staleness_seconds
-        )  # BR-021/BR-027 single-winner
-        if job is None:
+        if claim.decision == ClaimDecision.LEASE_LOST:
             return self._record(WorkerOutcome.LEASE_LOST)
-
-        # BR-027 idempotent post: if a prior attempt already posted an answer (ts stamped) OR
-        # had stamped the pre-post intent marker (a post may already have reached Slack but the
-        # ts stamp was lost to a crash), do NOT repost — just resolve. This closes the
-        # repost window (MINOR-b): a recovery-spawned reclaim can never produce a duplicate
-        # in-thread answer.
-        if job.post_attempted:
+        if claim.decision == ClaimDecision.SKIP_ALREADY_POSTED:
             self.jobs.transition(identity, JobStatus.RESOLVED, self.clock.now())
             return self._record(WorkerOutcome.RESOLVED)
-
-        # BR-022: bounded retries — a job past the attempt limit is abandoned to failed.
-        if rules.attempts_exhausted(job, self.config.max_attempts):
+        job = claim.job
+        assert job is not None  # PROCEED and EXHAUSTED always carry the claimed job
+        if claim.decision == ClaimDecision.EXHAUSTED:
             self._fail(identity, job, FailureCause.EXHAUSTED_RETRIES)
             return self._record(WorkerOutcome.FAILED)
 
