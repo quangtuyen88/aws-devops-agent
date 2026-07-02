@@ -21,11 +21,6 @@ class JobStatus(StrEnum):
         """``resolved`` and ``failed`` are terminal — no transition leaves them."""
         return self in {JobStatus.RESOLVED, JobStatus.FAILED}
 
-    @property
-    def is_complete(self) -> bool:
-        """At-most-once-*completed* (BR-011): only terminal states are complete."""
-        return self.is_terminal
-
 
 class AnswerType(StrEnum):
     """Classified question intent (ENT-004.answer-type, F-2). Drives BR-015."""

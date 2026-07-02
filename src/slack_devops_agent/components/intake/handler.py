@@ -19,7 +19,6 @@ from ...domain.entities import (
     OriginatingMessageRef,
     ReactionEvent,
 )
-from ...domain.enums import NonAllowlistedBehaviour
 from ...observability.logging import get_logger
 from ...observability.metrics import Metrics
 from ...ports import (
@@ -89,7 +88,7 @@ class IntakeHandler:
 
         allowlist = self.config.get_allowlist()
         if not rules.is_channel_allowed(mention, allowlist):  # BR-001
-            if allowlist.non_allowlisted_behaviour == NonAllowlistedBehaviour.REPLY_NOT_DESIGNATED:
+            if rules.should_reply_not_designated(allowlist):
                 self.slack.post_message(self._ref(mention), _NOT_DESIGNATED_TEXT)
             return self._record(IntakeOutcome.NOT_ALLOWLISTED)
 

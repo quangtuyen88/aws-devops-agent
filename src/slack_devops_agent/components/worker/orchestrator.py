@@ -23,7 +23,7 @@ from uuid import UUID
 
 from ...domain import rules
 from ...domain.entities import GroundingSource, OriginatingMessageRef, ProcessingJob, ThreadMessage
-from ...domain.enums import FailureCause, JobStatus, SafetyAction
+from ...domain.enums import FailureCause, JobStatus
 from ...observability.logging import get_logger
 from ...observability.metrics import Metrics
 from ...ports import (
@@ -126,7 +126,7 @@ class Worker:
         log = get_logger(__name__, str(correlation_id))
 
         existing = self.jobs.get(identity)
-        if existing is not None and existing.status.is_complete:  # BR-011
+        if existing is not None and not rules.should_process_existing(existing):  # BR-011
             return self._record(WorkerOutcome.SKIPPED_COMPLETE)
 
         job = self.jobs.acquire_lease(
@@ -208,9 +208,9 @@ class Worker:
 
         # Step 5 — safety gate FIRST (CS-4 / BR-012).
         verdict = self.safety.scan(assembled)
-        if verdict.recommended_action == SafetyAction.REFUSE:
+        if rules.safety_blocks_forward(verdict):
             raise _ProcessingError(FailureCause.SAFETY_REFUSE, [f.kind for f in verdict.findings])
-        if verdict.recommended_action == SafetyAction.WARN:
+        if rules.safety_requires_warning(verdict):
             self.slack.post_message(ref, "Heads up: your message may contain sensitive content.")
 
         # Step 6 — within-budget (BR-008).
