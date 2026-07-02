@@ -19,8 +19,8 @@ _NEGATIVE_EMOJI = {"-1", "thumbsdown"}
 
 # Reviewable text/IaC attachments only — never binaries/images/archives (which would feed junk
 # bytes into the prompt). Matched on the file name suffix and Slack's filetype.
-_REVIEWABLE_SUFFIXES = (".yaml", ".yml", ".json", ".tf", ".hcl", ".txt", ".md", ".template")
-_REVIEWABLE_FILETYPES = {"yaml", "yml", "json", "tf", "hcl", "text", "markdown", "template"}
+_REVIEWABLE_SUFFIXES = (".yaml", ".yml", ".json", ".tf", ".hcl", ".txt", ".md", ".template", ".csv")
+_REVIEWABLE_FILETYPES = {"yaml", "yml", "json", "tf", "hcl", "text", "markdown", "template", "csv"}
 # 256 KB cap so a large upload can't blow the prompt budget or Lambda memory.
 MAX_ATTACHED_FILE_BYTES = 262144
 

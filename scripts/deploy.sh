@@ -160,6 +160,13 @@ export TF_VAR_existing_security_group_ids="${EXISTING_SECURITY_GROUP_IDS}"
 [[ -n "${LAMBDA_ARTIFACT_S3_KEY:-}" ]] && export TF_VAR_lambda_artifact_s3_key="${LAMBDA_ARTIFACT_S3_KEY}"
 [[ -n "${SLACK_BOT_USER_ID:-}" ]] && export TF_VAR_slack_bot_user_id="${SLACK_BOT_USER_ID}"
 [[ -n "${MCP_API_KEY:-}" ]] && export TF_VAR_mcp_api_key="${MCP_API_KEY}"
+[[ -n "${MCP_BASE_URL:-}" ]] && export TF_VAR_mcp_base_url="${MCP_BASE_URL}"
+[[ -n "${KIRO_MODEL:-}" ]] && export TF_VAR_kiro_model="${KIRO_MODEL}"
+[[ -n "${KIRO_TIMEOUT_SECONDS:-}" ]] && export TF_VAR_kiro_timeout_seconds="${KIRO_TIMEOUT_SECONDS}"
+[[ -n "${GATEWAY_TLS_ENABLED:-}" ]] && export TF_VAR_gateway_tls_enabled="${GATEWAY_TLS_ENABLED}"
+[[ -n "${GATEWAY_DESIRED_COUNT:-}" ]] && export TF_VAR_gateway_desired_count="${GATEWAY_DESIRED_COUNT}"
+[[ -n "${GATEWAY_AUTOSCALE_MIN_CAPACITY:-}" ]] && export TF_VAR_gateway_autoscale_min_capacity="${GATEWAY_AUTOSCALE_MIN_CAPACITY}"
+[[ -n "${GATEWAY_ALB_IDLE_TIMEOUT_SECONDS:-}" ]] && export TF_VAR_gateway_alb_idle_timeout_seconds="${GATEWAY_ALB_IDLE_TIMEOUT_SECONDS}"
 
 # --- Run terraform ---------------------------------------------------------
 cd "${TF_DIR}"

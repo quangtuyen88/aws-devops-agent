@@ -81,7 +81,7 @@ class WorkerConfig:
     max_inference_calls: int = 2
     max_mcp_calls: int = 5
     max_input_tokens: int = 12000
-    heartbeat_seconds: float = 15.0
+    heartbeat_seconds: float = 45.0
     retry_base_ms: int = 500
     retry_max_attempts: int = 2
     retry_cap_ms: int = 8000

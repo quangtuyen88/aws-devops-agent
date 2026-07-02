@@ -1,7 +1,9 @@
 """CMP-002 — NFR-11 periodic "still working…" heartbeat emitter.
 
-While the W2 pipeline runs (inference + MCP, up to the 30s NFR-17 budget), the worker
-posts a periodic in-thread heartbeat (~15s) so the asker sees progress rather than silence.
+While the W2 pipeline runs (inference + MCP, up to the NFR-17 budget), the worker posts a
+periodic in-thread heartbeat (every ``interval_seconds``) so the asker sees progress rather
+than silence. The interval is sized so a normal answer arrives before the first beat — only
+genuinely slow requests emit one.
 
 Per infra-spec §2.4 (F6), heartbeat emission is kept **off the critical CPU path**: it runs
 on a daemon background thread driven by a :class:`threading.Event`, so a slow synchronous
@@ -43,7 +45,7 @@ class HeartbeatEmitter:
 
     slack: SlackGateway
     ref: OriginatingMessageRef
-    interval_seconds: float = 15.0
+    interval_seconds: float = 45.0
     metrics: Metrics | None = None
     beats: int = field(default=0, init=False)
     _stop: threading.Event = field(default_factory=threading.Event, init=False)

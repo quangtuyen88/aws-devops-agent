@@ -98,6 +98,22 @@ def test_pick_reviewable_file_selects_yaml() -> None:
     assert picked.download_url == "https://files.slack/x"
 
 
+def test_pick_reviewable_file_selects_csv() -> None:
+    event = {
+        "files": [
+            {
+                "name": "cost-report.csv",
+                "filetype": "csv",
+                "size": 2048,
+                "url_private_download": "https://files.slack/c",
+            }
+        ]
+    }
+    picked = pick_reviewable_file(event)
+    assert isinstance(picked, ReviewableFile)
+    assert picked.name == "cost-report.csv"
+
+
 def test_pick_reviewable_file_rejects_binary_type() -> None:
     event = {
         "files": [

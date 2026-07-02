@@ -58,6 +58,18 @@ variable "certificate_arn" {
   description = "ACM certificate ARN for the internal ALB TLS listener (unused in existing-ALB mode — the borrowed listener carries its own cert)."
 }
 
+variable "tls_enabled" {
+  type        = bool
+  default     = false
+  description = "Create a 443/HTTPS listener (requires certificate_arn). When false, create a plaintext 80/HTTP listener for the internal worker→ALB hop (no cert needed)."
+}
+
+variable "alb_idle_timeout_seconds" {
+  type        = number
+  default     = 80
+  description = "ALB idle timeout. MUST be >= the kiro gateway HTTP client timeout (KIRO_TIMEOUT_SECONDS) so the ALB does not 504 a slow-but-valid inference before the app timeout fires."
+}
+
 # --- Existing-ALB (destroy-safe) mode ---
 
 variable "use_existing_alb" {

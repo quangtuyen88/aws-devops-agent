@@ -56,18 +56,22 @@ resource "aws_ecs_cluster" "this" {
   tags = var.tags
 }
 
-# --- Security groups: ALB accepts 443 from the worker SG; tasks accept only from the ALB. ---
+# --- Security groups: ALB accepts the worker SG on the listener port; tasks accept only from
+# the ALB. Listener port is 443 (TLS) or 80 (plaintext, internal-only) per var.tls_enabled. ---
 
 resource "aws_security_group" "alb" {
-  count       = var.use_existing_alb ? 0 : 1
-  name        = "${var.name_prefix}-gateway-alb-sg"
+  count = var.use_existing_alb ? 0 : 1
+  name  = "${var.name_prefix}-gateway-alb-sg"
+  # NOTE: AWS SG descriptions are immutable — changing this text forces a destroy/recreate of
+  # the live ALB SG. Kept verbatim to avoid that churn; the real port is in the ingress rule
+  # description below (HTTP/80 or HTTPS/443 per tls_enabled).
   description = "Internal ALB for kiro-gateway - 443 from the worker SG only."
   vpc_id      = var.vpc_id
 
   ingress {
-    description     = "HTTPS from the worker Lambda."
-    from_port       = 443
-    to_port         = 443
+    description     = var.tls_enabled ? "HTTPS from the worker Lambda." : "HTTP from the worker Lambda."
+    from_port       = var.tls_enabled ? 443 : 80
+    to_port         = var.tls_enabled ? 443 : 80
     protocol        = "tcp"
     security_groups = [var.worker_sg_id]
   }
@@ -114,7 +118,10 @@ resource "aws_lb" "this" {
   load_balancer_type = "application"
   subnets            = var.private_subnet_ids
   security_groups    = [aws_security_group.alb[0].id]
-  tags               = var.tags
+  # Must be >= the kiro gateway HTTP client timeout, else the ALB 504s a still-running
+  # inference before the app-level timeout can act (default 60s is below the 70/75/85 chain).
+  idle_timeout = var.alb_idle_timeout_seconds
+  tags         = var.tags
 }
 
 # Target group is always app-created (and removed cleanly on destroy in either mode).
@@ -137,12 +144,27 @@ resource "aws_lb_target_group" "this" {
 }
 
 resource "aws_lb_listener" "https" {
-  count             = var.use_existing_alb ? 0 : 1
+  count             = (!var.use_existing_alb && var.tls_enabled) ? 1 : 0
   load_balancer_arn = aws_lb.this[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
   certificate_arn   = var.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.this.arn
+  }
+}
+
+# Plaintext HTTP listener — internal-only path (private subnets, worker SG → ALB). Created
+# when tls_enabled = false to avoid an ACM cert on the internal hop; flip tls_enabled to
+# restore the 443/TLS listener (NFR-5).
+resource "aws_lb_listener" "http" {
+  count             = (!var.use_existing_alb && !var.tls_enabled) ? 1 : 0
+  load_balancer_arn = aws_lb.this[0].arn
+  port              = 80
+  protocol          = "HTTP"
 
   default_action {
     type             = "forward"
@@ -307,7 +329,7 @@ resource "aws_ecs_service" "this" {
     rollback = true
   }
 
-  depends_on = [aws_lb_listener.https, aws_lb_listener_rule.this]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http, aws_lb_listener_rule.this]
 }
 
 # --- Application Auto Scaling: baseline 2 → max 4 on average CPU (infra-spec §2.3/§1, F4). ---
